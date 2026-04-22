@@ -1,0 +1,27 @@
+ERROR: The process "103516" not found.
+Plugin:  C:\Program Files\Common Files\VST3\Serum_x64.dll
+Presets: 4 scanned, using first two:
+  - D:\Documents\Xfer\Serum Presets\Presets\Bass (Hard)\BA 8bitfwap [GI].fxp
+  - D:\Documents\Xfer\Serum Presets\Presets\Bass (Hard)\BA Access 2 Mthrshp Denied [LCV].fxp
+
+--- Test 1: load_preset on already-loaded graph ---
+  Preset 0: BA 8bitfwap [GI].fxp  shape=(2, 88200)  peak=0.7532
+  Preset 1: BA Access 2 Mthrshp Denied [LCV].fxp  shape=(2, 88200)  peak=0.6094
+  [PASS] Two presets produced distinct non-silent audio on one engine
+
+--- Test 3: load_preset on nonexistent path ---
+  load_preset(bad path) raised RuntimeError: Error: (PluginProcessor::loadPreset) File not found: C:\Program Files\Common Files\VST3\definitely_does_not_exist.fxp
+  Post-bad-path render: shape=(2, 88200)  peak=0.7532
+  [PASS] bad path raised a catchable exception; engine recovered
+
+--- Test 2: loky BrokenProcessPool recovery ---
+  Warm render OK: pid=6124, peak=0.7532
+  Kill task raised TerminatedWorkerError in 0.06s (expected — simulates wedged worker)
+  Old executor rejects new submissions with TerminatedWorkerError — expected; caller must fetch a fresh executor to recover
+  Post-kill render OK on fresh executor: pid=21548, peak=1.2204
+  [PASS] Pool survived the crash; fresh executor picks up new work
+
+=== Summary ===
+  [PASS] 1. load_preset on loaded graph
+  [PASS] 3. bad-path recovery
+  [PASS] 2. loky BrokenProcessPool
