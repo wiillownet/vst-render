@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+output/
+scratch_output/
+*.wav
+*.npy
+.vscode/
+.idea/
+.claude/settings.local.json
