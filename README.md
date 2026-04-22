@@ -2,7 +2,7 @@
 
 Batch-render VST2 `.fxp` presets to audio files using [DawDreamer](https://github.com/DBraun/DawDreamer) as the headless engine. Windows-only; v1 officially supports Serum.
 
-See [DESIGN.md](DESIGN.md) for the full specification and [CLAUDE.md](CLAUDE.md) for the implementation notes.
+See [DESIGN.md](DESIGN.md) for the full specification, [CLAUDE.md](CLAUDE.md) for the implementation notes, and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for tracked limitations.
 
 ## Requirements
 
