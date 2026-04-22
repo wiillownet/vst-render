@@ -676,17 +676,18 @@ __all__ = [
 - **Don't add `if __name__ == '__main__'` guards.** loky handles Windows spawn correctly without them; adding them signals a regression to raw multiprocessing.
 - **Don't call `engine.load_graph()` on every render.** Build the graph once in `init_worker`; `load_preset()` updates the processor state in-place.
 - **Don't use VST3 `.dll` or `.vst3` paths with `.fxp` presets.** DawDreamer silently ignores `.fxp` when loaded as VST3 — no error, just wrong output.
+- **Don't assume a `.dll` in the VST2 folder is 64-bit.** On Windows, Serum's installer puts the 32-bit VST2 at `C:/Program Files/Common Files/VST2/Serum.dll` and the 64-bit VST2 at `C:/Program Files/Common Files/VST3/Serum_x64.dll` (yes, a VST2 `.dll` in the `VST3/` folder — the actual VST3 is the adjacent `Serum.vst3` bundle). Loading a 32-bit DLL from 64-bit Python raises `OSError [WinError 193] %1 is not a valid Win32 application`; DawDreamer surfaces this as `RuntimeError: Unable to load plugin.` with no hint as to why. Point users at the `_x64.dll`.
 
 ---
 
-## Likely implementation gotchas to verify early
+## Verified architectural findings
 
-These assumptions are correct to the best of our knowledge but should be verified with a real Serum render before building anything that depends on them:
+The three assumptions below were verified against real Serum before the rest of the package was built. The harness is checked in at `scripts/verify_dawdreamer.py` — run it if DawDreamer is upgraded or if a different VST2 plugin is added to the supported list.
 
-1. **`load_preset()` on an already-loaded graph works without rebuilding.** The design assumes you can call `synth.load_preset()` between renders without calling `engine.load_graph()` again. Verify this with a two-preset sequential render in a scratch script as the very first thing you do.
+1. **`load_preset()` on an already-loaded graph updates in place — verified.** Two sequential presets on one engine produce distinct non-silent audio. No need to rebuild the graph between renders.
 
-2. **loky `BrokenProcessPool` redistribution catches wedged plugin instances.** If Serum enters a bad state mid-render, loky should surface this as a `BrokenProcessPool` exception on the future, allowing the job to be resubmitted to a new worker. Verify this behaves as expected rather than hanging indefinitely.
+2. **`load_preset()` on a missing file raises `RuntimeError` — verified.** The message is descriptive (`Error: (PluginProcessor::loadPreset) File not found: <path>`) and the engine stays usable for subsequent good loads. `render_task`'s `except Exception` block handles it cleanly; no pre-check needed.
 
-3. **`load_preset()` on a nonexistent file doesn't wedge the worker pool.** DawDreamer's error handling for a missing `.fxp` path is plugin-specific. Verify that calling `_synth.load_preset("nonexistent.fxp")` raises a catchable Python exception (so `render_task`'s `except` block handles it cleanly) rather than crashing the worker process silently. Test by passing a deliberately bad path early.
+3. **loky crash recovery — partially as expected; one nuance.** A worker killed via `os._exit` surfaces as `TerminatedWorkerError` on the future in ~60 ms (no hang). But the **executor reference itself is permanently flagged broken** — any further `submit()` on the same `executor` variable raises immediately. Recovery requires calling `get_reusable_executor(...)` again to obtain a freshly spawned pool. DESIGN.md's "redistribute unfinished jobs to surviving workers" wording is optimistic: loky does not redistribute; the reusable-executor API just respawns on the next call.
 
-If any assumption is wrong, the fix is small but the architecture depends on it — better to know immediately.
+   **Implication for `batch.py`:** `_run_batch` as skeletoned above submits everything upfront and collects futures. On a single-worker crash every subsequent future on that executor also raises — each is logged as an error result and the batch proceeds (returning error dicts for the lost jobs). Users re-run with `--skip-existing` to pick up the remainder. A more ambitious implementation could call `get_reusable_executor()` again mid-batch and resubmit unfinished jobs; that's deferred until a user hits it.
