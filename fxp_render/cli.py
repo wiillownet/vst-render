@@ -10,8 +10,16 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
-from .batch import run_batch_to_disk
+from .batch import resolve_worker_count, run_batch_to_disk
 from .presets import discover_presets
 from .utils import assign_output_paths, compose_filename, get_midi_duration
 
@@ -120,8 +128,34 @@ def render(
         raise typer.Exit(code=0)
 
     output.mkdir(parents=True, exist_ok=True)
-    typer.echo(f"Rendering {len(jobs)} preset(s) with {workers} workers…")
-    results = run_batch_to_disk(jobs, workers, str(plugin.resolve()), sample_rate)
+    n_workers = resolve_worker_count(workers)
+    plugin_str = str(plugin.resolve())
+
+    # In verbose mode, per-preset DEBUG logs replace the progress bar so
+    # the two don't fight for the terminal.
+    if verbose:
+        typer.echo(f"Rendering {len(jobs)} preset(s) with {n_workers} workers…")
+        results = run_batch_to_disk(jobs, n_workers, plugin_str, sample_rate)
+    else:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            TextColumn("•"),
+            TimeRemainingColumn(),
+        ) as progress:
+            task_id = progress.add_task(
+                f"Rendering ({n_workers} workers)", total=len(jobs)
+            )
+            results = run_batch_to_disk(
+                jobs,
+                n_workers,
+                plugin_str,
+                sample_rate,
+                on_result=lambda _r: progress.advance(task_id),
+            )
 
     ok = sum(1 for r in results if r["status"] == "ok")
     skipped = sum(1 for r in results if r["status"] == "skipped")

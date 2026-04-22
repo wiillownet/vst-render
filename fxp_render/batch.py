@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Iterator
+from concurrent.futures import as_completed
+from typing import Callable, Iterator
 
 from loky import get_reusable_executor
 
@@ -38,11 +39,17 @@ def _get_executor(workers: int, plugin_path: str, sample_rate: int):
 
 
 def run_batch_to_disk(
-    jobs: list[dict], workers: int, plugin_path: str, sample_rate: int
+    jobs: list[dict],
+    workers: int,
+    plugin_path: str,
+    sample_rate: int,
+    on_result: Callable[[dict], None] | None = None,
 ) -> list[dict]:
     """
-    CLI/batch entry: submit every job to the pool, collect results in
-    input order. Per-job errors become `{"status": "error", ...}` dicts.
+    CLI/batch entry: submit every job to the pool, return results in
+    input order. `on_result`, if provided, is called once per job as each
+    future completes — use it to drive a progress bar or per-preset log.
+    Per-job errors become `{"status": "error", ...}` dicts.
 
     If a worker process crashes (TerminatedWorkerError / BrokenProcessPool)
     the current executor reference is permanently flagged broken — every
@@ -52,19 +59,24 @@ def run_batch_to_disk(
     already landed on disk.
     """
     executor = _get_executor(workers, plugin_path, sample_rate)
-    futures = [executor.submit(render_to_disk, job) for job in jobs]
-    results: list[dict] = []
-    for job, future in zip(jobs, futures):
+    futures = {executor.submit(render_to_disk, job): idx for idx, job in enumerate(jobs)}
+    results: list[dict | None] = [None] * len(jobs)
+    for future in as_completed(futures):
+        idx = futures[future]
         try:
-            results.append(future.result())
+            result = future.result()
         except Exception as exc:
+            job = jobs[idx]
             logger.error("Worker error for %s: %s", job.get("preset_path"), exc)
-            results.append({
+            result = {
                 "status": "error",
                 "path": job.get("preset_path"),
                 "error": str(exc),
-            })
-    return results
+            }
+        results[idx] = result
+        if on_result is not None:
+            on_result(result)
+    return results  # type: ignore[return-value]  # all slots filled by the loop above
 
 
 def iter_batch_to_memory(
