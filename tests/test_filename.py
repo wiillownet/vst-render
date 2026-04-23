@@ -54,6 +54,25 @@ def test_compose_truncates_to_196(tmp_path: Path):
     assert len(result) == 196
 
 
+def test_compose_relative_preset_root_with_relative_preset(tmp_path, monkeypatch):
+    # Regression: a relative presets_root passed alongside an absolute
+    # preset_path (as discover_presets returns) used to raise ValueError
+    # inside relative_to() and silently collapse {subpath} to "".
+    # The CLI now resolves presets_root before calling compose_filename;
+    # this test pins the resolved-abs + abs-preset contract.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "presets" / "Leads").mkdir(parents=True)
+    preset_abs = (tmp_path / "presets" / "Leads" / "lead.fxp").resolve()
+    preset_abs.write_bytes(b"")
+
+    # presets_root resolved to absolute (what cli.py does post-fix).
+    resolved_root = Path("presets").resolve()
+    result = compose_filename("{subpath}_{preset}", preset_abs, resolved_root, 48, 127)
+    assert result == "Leads_lead", (
+        f"expected subpath to resolve to 'Leads'; got {result!r}"
+    )
+
+
 def test_compose_preset_outside_root(tmp_path: Path):
     # If the preset isn't under presets_root, subpath silently becomes ""
     # (relative_to raises ValueError, which we swallow).

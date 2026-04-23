@@ -10,6 +10,7 @@ dependencies = [
     "dawdreamer",
     "soundfile",
     "typer",
+    "rich",
     "loky",
     "mido",
     "numpy",

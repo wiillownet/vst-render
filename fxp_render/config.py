@@ -30,8 +30,8 @@ class RenderConfig:
             raise ValueError(f"velocity must be 1-127, got {self.velocity}")
         if self.duration <= 0:
             raise ValueError(f"duration must be > 0, got {self.duration}")
-        if self.tail <= 0:
-            raise ValueError(f"tail must be > 0, got {self.tail}")
+        if self.tail < 0:
+            raise ValueError(f"tail must be >= 0, got {self.tail}")
         if self.bit_depth not in ("16", "24", "32f"):
             raise ValueError(
                 f"bit_depth must be '16', '24', or '32f', got {self.bit_depth!r}"

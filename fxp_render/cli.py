@@ -5,7 +5,6 @@ collisions, and dispatches to the disk-writing batch path.
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -43,9 +42,9 @@ def render(
     output: Path = typer.Argument(..., help="Output directory (created if missing)."),
     note: Optional[int] = typer.Option(None, min=0, max=127, help="MIDI note (0-127). Default 48 (C3)."),
     velocity: int = typer.Option(127, min=1, max=127, help="MIDI velocity (1-127)."),
-    duration: float = typer.Option(1.0, min=0.0, help="Note-on duration in seconds."),
-    tail: float = typer.Option(1.0, min=0.0, help="Release silence in seconds."),
-    sample_rate: int = typer.Option(44100, "--sample-rate", help="Output sample rate in Hz."),
+    duration: float = typer.Option(1.0, help="Note-on duration in seconds (> 0)."),
+    tail: float = typer.Option(1.0, min=0.0, help="Release silence in seconds (>= 0)."),
+    sample_rate: int = typer.Option(44100, "--sample-rate", min=1, help="Output sample rate in Hz."),
     bit_depth: str = typer.Option("16", "--bit-depth", help="Output bit depth: 16, 24, or 32f."),
     fmt: str = typer.Option("wav", "--format", help="Output container: wav or npy."),
     filename_template: str = typer.Option(
@@ -71,6 +70,10 @@ def render(
     if note is None:
         note = 48
 
+    # Typer's `min=` is inclusive, so "> 0" on duration needs a manual check.
+    if duration <= 0:
+        raise typer.BadParameter(f"--duration must be > 0 (got {duration}).")
+
     if bit_depth not in ("16", "24", "32f"):
         raise typer.BadParameter(f"--bit-depth must be 16, 24, or 32f (got {bit_depth!r}).")
     if fmt not in ("wav", "npy"):
@@ -82,6 +85,9 @@ def render(
     if not presets.exists():
         typer.echo(f"Presets path not found: {presets}", err=True)
         raise typer.Exit(code=2)
+    if output.exists() and not output.is_dir():
+        typer.echo(f"Output path exists and is not a directory: {output}", err=True)
+        raise typer.Exit(code=2)
 
     preset_files = discover_presets(presets, recurse=not no_recurse)
     if not preset_files:
@@ -89,7 +95,10 @@ def render(
         raise typer.Exit(code=0)
 
     # Single-file mode: presets_root=None so {subpath} collapses out.
-    presets_root: Path | None = presets if presets.is_dir() else None
+    # Resolve when a directory so `relative_to` works against the absolute
+    # preset paths that discover_presets returns — a relative presets arg
+    # would otherwise silently collapse {subpath} to an empty string.
+    presets_root: Path | None = presets.resolve() if presets.is_dir() else None
 
     # Compute MIDI duration once in the main process — all workers share it.
     midi_duration: float | None = None
@@ -98,7 +107,11 @@ def render(
         if not midi.exists():
             typer.echo(f"MIDI file not found: {midi}", err=True)
             raise typer.Exit(code=2)
-        midi_duration = get_midi_duration(midi)
+        try:
+            midi_duration = get_midi_duration(midi)
+        except (TypeError, ValueError) as exc:
+            typer.echo(f"Error reading MIDI file '{midi}': {exc}", err=True)
+            raise typer.Exit(code=2) from None
         midi_str = str(midi.resolve())
 
     extension = ".npy" if fmt == "npy" else ".wav"

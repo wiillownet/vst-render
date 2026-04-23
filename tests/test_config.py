@@ -66,10 +66,16 @@ def test_duration_must_be_positive(dur):
         RenderConfig(plugin_path="p", duration=dur)
 
 
-@pytest.mark.parametrize("tail", [0, -0.1])
-def test_tail_must_be_positive(tail):
+@pytest.mark.parametrize("tail", [-0.1, -1.0])
+def test_tail_must_be_non_negative(tail):
     with pytest.raises(ValueError, match="tail"):
         RenderConfig(plugin_path="p", tail=tail)
+
+
+def test_tail_zero_accepted():
+    # tail=0 is legitimate for percussive one-shots that don't need a
+    # release-envelope tail.
+    RenderConfig(plugin_path="p", tail=0)
 
 
 @pytest.mark.parametrize("bd", ["8", "32", 16, "16bit"])

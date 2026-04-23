@@ -87,8 +87,6 @@ def iter_batch_to_memory(
     each job completes (unordered — driven by whichever worker finishes
     first). Callers building an ordered result dict collect all yields.
     """
-    from concurrent.futures import as_completed
-
     executor = _get_executor(workers, plugin_path, sample_rate)
     futures = {executor.submit(render_to_memory, job): job for job in jobs}
     for future in as_completed(futures):
