@@ -38,6 +38,18 @@ Tracked user-visible limitations and upstream quirks. Not every limitation is a 
 
 ---
 
+## Windows reserved filenames are not filtered
+
+**Symptom:** a render succeeds to a file named `CON.wav`, `PRN.wav`, `NUL.wav`, `AUX.wav`, `COM1.wav`–`COM9.wav`, or `LPT1.wav`–`LPT9.wav`, but the file cannot be opened, renamed, or deleted normally on Windows because those names are reserved device names. This includes the same names with any extension, e.g. `CON.anything`.
+
+**Repro:** rename a preset to `CON.fxp` (or any reserved device name) and render with the default `{preset}` template.
+
+**Cause:** `sanitize()` only strips characters outside `[A-Za-z0-9_-]`; it does not special-case Windows device names. They're valid stems as far as the sanitizer is concerned.
+
+**Workaround:** rename the offending preset before rendering, or use a `--filename-template` that always prefixes something (e.g. `fxp_{preset}` or `{folder}_{preset}`) so the output can never land on a bare reserved name. fxp-render may add an explicit filter for these names in a future release.
+
+---
+
 ## A worker crash mid-batch aborts the remaining jobs on that executor
 
 **Symptom:** after a `TerminatedWorkerError` from one render, all subsequent futures submitted to the same executor also raise, and the remaining jobs in the batch are marked as errors.

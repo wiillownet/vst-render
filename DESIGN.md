@@ -180,15 +180,18 @@ Each variable's value is independently sanitized before substitution:
 2. Replace any character that is not alphanumeric, a hyphen, or an underscore with `_`. Spaces are replaced — filenames with literal spaces are awkward on the Windows CLI.
 3. Collapse runs of multiple `_` into a single `_`.
 4. Strip leading/trailing `_`.
-5. If the result is empty after sanitization, fall back to `preset_<index>` (e.g., `preset_0042`).
+
+A variable's sanitized value is allowed to be empty — adjacent separators in the composed name collapse out in the next step, so an empty `{subpath}` or `{folder}` simply vanishes from the filename without breaking it.
 
 The operations are applied in this order to avoid truncation interfering with collision detection:
 
 1. **Sanitize** each variable independently (rules above).
-2. **Compose** the full filename by substituting variables into the template.
-3. **Truncate** the composed name to **196 characters** (leaving 4 characters of headroom for a `_999`-style collision suffix).
+2. **Compose** the full filename by substituting variables into the template and collapsing any runs of `_` introduced by empty substitutions.
+3. **Truncate** the composed name to **196 characters** (leaving 4 characters of headroom for short collision suffixes).
 4. **Check for collisions** against already-assigned output paths.
-5. If a collision exists, **append `_1`, `_2`, etc.** The 196-char truncation from step 3 leaves enough headroom for suffixes up to `_999`; no re-truncation is needed.
+5. If a collision exists, **append `_1`, `_2`, etc.** The 196-char truncation from step 3 leaves 4 chars of headroom, fitting suffixes up to `_999` without re-truncation; larger collision counts push the filename past the 200-char comfort zone but stay well under Windows `MAX_PATH` in typical output paths.
+
+**Final-stem fallback:** if the composed-and-collapsed stem ends up empty (e.g. the template resolves to only empty variables, or a preset name sanitizes to nothing), the job gets a deterministic `preset_NNNN` stem where `NNNN` is the zero-padded job index. Applied by `assign_output_paths`, not inside variable sanitization.
 
 ### Collision Handling and Overwrite Behaviour
 
@@ -404,7 +407,7 @@ audio = render_preset("C:/Presets/lead.fxp", RenderConfig(...))
 | `load_preset()` failure | Skip preset, log warning, continue |
 | Render exception | Skip preset, log warning, continue |
 | Silent output (peak amplitude below −90 dBFS) | Log warning with preset path, continue. Checked as `np.max(np.abs(audio)) < 3.16e-5`. The −90 dBFS threshold was chosen to match the 16-bit quantization floor — anything quieter is below the noise floor of the default output format. Users rendering at `--bit-depth 24` or `32f` may see this fire for legitimately quiet presets; treat warnings as advisory. Note: presets with long attack envelopes or pre-delay effects may trigger this spuriously. |
-| Worker crash | Log error with worker ID and last preset attempted; redistribute that worker's unfinished jobs to surviving workers via loky's built-in `BrokenProcessPool` recovery |
+| Worker crash | Log the error on the crashed job's future. loky flags the entire executor as broken, so every remaining future submitted to it also raises — each is surfaced as an error result and the batch returns without hanging. Recovery on a re-run is handled by `--skip-existing`; see `KNOWN_ISSUES.md` for details. |
 | `--midi` + `--note` both passed | Manual check on `note` and `midi` parameters raises error before execution |
 | Invalid MIDI file | CLI error before workers start |
 | Type 2 MIDI file | Hard error with message directing user to convert to Type 0 or Type 1 |
@@ -443,7 +446,7 @@ All decisions have been resolved. See the table below for a full record.
 |---|---|---|
 | 1 | Default note duration | ✅ **1.0 second** |
 | 2 | Default tail duration | ✅ **1.0 second** (total render = 2.0s by default) |
-| 3 | Worker crash behavior | ✅ **Log + redistribute** unfinished jobs to surviving workers via loky |
+| 3 | Worker crash behavior | ✅ **Log each broken future as an error; return the batch without hanging.** Verified: loky flags the whole executor broken on a worker crash, it does not redistribute. Re-runs use `--skip-existing`. |
 | 4 | Filename convention | ✅ **Preserve preset stem by default**; `--filename-template` flag for overrides |
 | 5 | `--bit-depth 32f` | ✅ **Included** — trivial to implement, useful for ML float pipelines |
 | 6 | `mido` dependency | ✅ **Keep** — `MidiFile.length` handles tempo-aware duration in one line |
