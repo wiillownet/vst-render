@@ -54,22 +54,44 @@ def test_compose_truncates_to_196(tmp_path: Path):
     assert len(result) == 196
 
 
-def test_compose_relative_preset_root_with_relative_preset(tmp_path, monkeypatch):
-    # Regression: a relative presets_root passed alongside an absolute
-    # preset_path (as discover_presets returns) used to raise ValueError
-    # inside relative_to() and silently collapse {subpath} to "".
-    # The CLI now resolves presets_root before calling compose_filename;
-    # this test pins the resolved-abs + abs-preset contract.
+def test_compose_resolved_root_with_absolute_preset(tmp_path, monkeypatch):
+    # Happy path: presets_root is absolute (matches the absolute paths
+    # discover_presets returns). {subpath} resolves correctly.
     monkeypatch.chdir(tmp_path)
     (tmp_path / "presets" / "Leads").mkdir(parents=True)
     preset_abs = (tmp_path / "presets" / "Leads" / "lead.fxp").resolve()
     preset_abs.write_bytes(b"")
 
-    # presets_root resolved to absolute (what cli.py does post-fix).
     resolved_root = Path("presets").resolve()
     result = compose_filename("{subpath}_{preset}", preset_abs, resolved_root, 48, 127)
     assert result == "Leads_lead", (
         f"expected subpath to resolve to 'Leads'; got {result!r}"
+    )
+
+
+def test_compose_unresolved_root_with_absolute_preset_collapses_subpath(
+    tmp_path, monkeypatch
+):
+    """compose_filename's contract: presets_root must be absolute (matching
+    the absolute paths from discover_presets). If a caller hands it a
+    relative root with absolute preset paths, relative_to() raises and
+    {subpath} silently collapses to ''. This pins that contract from the
+    utility side — the CLI's responsibility is to resolve presets_root
+    before calling here. Reverting cli.py's `.resolve()` makes this case
+    fire end-to-end (the CLI test catches it); this test makes the
+    underlying utility behavior explicit so the contract is double-pinned.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "presets" / "Leads").mkdir(parents=True)
+    preset_abs = (tmp_path / "presets" / "Leads" / "lead.fxp").resolve()
+    preset_abs.write_bytes(b"")
+
+    relative_root = Path("presets")  # NOT resolved — caller-error shape
+    result = compose_filename("{subpath}_{preset}", preset_abs, relative_root, 48, 127)
+    # subpath collapses to "", leaving just the preset stem after the
+    # adjacent-underscore collapse step.
+    assert result == "lead", (
+        f"expected subpath to collapse to ''; got {result!r}"
     )
 
 
