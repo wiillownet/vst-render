@@ -6,6 +6,8 @@ range checks only; file existence is verified on first use here).
 """
 from __future__ import annotations
 
+import dataclasses
+import threading
 from pathlib import Path
 from typing import Iterator
 
@@ -37,14 +39,19 @@ class BatchRenderer:
 
     def __init__(self, config: RenderConfig):
         self.config = config
+        self._frozen_config: RenderConfig | None = None
         self._engine = None
         self._synth = None
         self._midi_duration: float | None = None
 
     def __enter__(self) -> "BatchRenderer":
-        self._midi_duration = _validate_paths(self.config)
+        # Freeze a copy of the config at entry so subsequent mutations to
+        # `self.config` can't desync `_midi_duration` from the (possibly new)
+        # `midi_path`. Cheap insurance against a silent failure mode.
+        self._frozen_config = dataclasses.replace(self.config)
+        self._midi_duration = _validate_paths(self._frozen_config)
         self._engine, self._synth = make_engine(
-            self.config.plugin_path, self.config.sample_rate
+            self._frozen_config.plugin_path, self._frozen_config.sample_rate
         )
         return self
 
@@ -52,19 +59,30 @@ class BatchRenderer:
         # DawDreamer has no explicit teardown — drop refs for GC.
         self._engine = None
         self._synth = None
+        self._frozen_config = None
 
     def render(self, fxp_path: str | Path) -> np.ndarray:
+        # CLAUDE.md forbids threading with DawDreamer — it hangs after the
+        # first cross-thread call. Surface the foot-gun loudly here rather
+        # than letting an embedder lose hours to a silent hang.
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError(
+                "BatchRenderer.render() must be called from the main thread. "
+                "DawDreamer hangs when used from threads (see CLAUDE.md). "
+                "Use ParallelBatchRenderer if you need concurrent rendering."
+            )
         if self._engine is None:
             raise RuntimeError("BatchRenderer must be used as a context manager")
+        cfg = self._frozen_config
         return render_one(
             self._engine,
             self._synth,
             fxp_path,
-            note=self.config.note,
-            velocity=self.config.velocity,
-            duration=self.config.duration,
-            tail=self.config.tail,
-            midi_path=self.config.midi_path,
+            note=cfg.note,
+            velocity=cfg.velocity,
+            duration=cfg.duration,
+            tail=cfg.tail,
+            midi_path=cfg.midi_path,
             midi_duration=self._midi_duration,
         )
 
@@ -81,28 +99,39 @@ class ParallelBatchRenderer:
     def __init__(self, config: RenderConfig, workers: int = -1):
         self.config = config
         self.workers = workers
+        self._frozen_config: RenderConfig | None = None
         self._midi_duration: float | None = None
 
     def __enter__(self) -> "ParallelBatchRenderer":
-        self._midi_duration = _validate_paths(self.config)
+        # Freeze a copy of the config at entry. _midi_duration is computed
+        # against this snapshot; jobs read midi_path / sample_rate / etc.
+        # from the same snapshot so post-enter mutations to self.config
+        # can't desync the two.
+        self._frozen_config = dataclasses.replace(self.config)
+        self._midi_duration = _validate_paths(self._frozen_config)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         # Executor is owned by loky's reusable cache; leave it warm so the
         # next ParallelBatchRenderer in this process reuses the workers.
-        pass
+        self._frozen_config = None
 
     def _build_jobs(self, preset_paths: list[str | Path]) -> list[dict]:
+        cfg = self._frozen_config
+        if cfg is None:
+            raise RuntimeError(
+                "ParallelBatchRenderer must be used as a context manager"
+            )
         return [
             {
                 "preset_path": str(Path(p).resolve()),
-                "note": self.config.note,
-                "velocity": self.config.velocity,
-                "duration": self.config.duration,
-                "tail": self.config.tail,
-                "midi_path": str(self.config.midi_path) if self.config.midi_path else None,
+                "note": cfg.note,
+                "velocity": cfg.velocity,
+                "duration": cfg.duration,
+                "tail": cfg.tail,
+                "midi_path": str(cfg.midi_path) if cfg.midi_path else None,
                 "midi_duration": self._midi_duration,
-                "sample_rate": self.config.sample_rate,
+                "sample_rate": cfg.sample_rate,
             }
             for p in preset_paths
         ]
@@ -110,8 +139,9 @@ class ParallelBatchRenderer:
     def iter_batch(self, preset_paths: list[str | Path]) -> Iterator[tuple[str, np.ndarray]]:
         """Yield `(fxp_path, audio)` as each job completes (unordered)."""
         jobs = self._build_jobs(preset_paths)
+        cfg = self._frozen_config
         for result in iter_batch_to_memory(
-            jobs, self.workers, str(self.config.plugin_path), self.config.sample_rate
+            jobs, self.workers, str(cfg.plugin_path), cfg.sample_rate
         ):
             if result["status"] == "ok":
                 yield result["path"], result["audio"]

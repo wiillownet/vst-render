@@ -90,7 +90,7 @@ fxp-render [OPTIONS] PLUGIN PRESETS OUTPUT
 | `--note` | int (0–127) | `48` (C3) | MIDI note to render. Defaults to `None` internally — resolved to `48` in code, not by Typer, so that `--midi` mutual exclusion can be detected cleanly. |
 | `--velocity` | int (1–127) | `127` | MIDI velocity |
 | `--duration` | float | `1.0` | Note-on duration in seconds |
-| `--tail` | float | `1.0` | Silence after note-off to capture release envelope (seconds). Total render = `duration + tail`. |
+| `--tail` | float | `1.0` | Silence after note-off to capture release envelope (seconds, `>= 0`; pass `0` for percussive presets that don't need a release tail). Total render = `duration + tail`. |
 | `--sample-rate` | int | `44100` | Output sample rate in Hz |
 | `--bit-depth` | choice: `16`, `24`, `32f` | `16` | Output bit depth. `32f` = 32-bit float WAV (useful for ML pipelines). |
 | `--format` | choice: `wav`, `npy` | `wav` | Output container. `npy` saves raw float32 numpy arrays, skipping bit-depth conversion entirely. |
@@ -322,8 +322,8 @@ class RenderConfig:
             raise ValueError(f"velocity must be 1–127, got {self.velocity}")
         if self.duration <= 0:
             raise ValueError(f"duration must be > 0, got {self.duration}")
-        if self.tail <= 0:
-            raise ValueError(f"tail must be > 0, got {self.tail}")
+        if self.tail < 0:
+            raise ValueError(f"tail must be >= 0, got {self.tail}")
 ```
 
 `bit_depth` must be passed as one of the string literals `"16"`, `"24"`, or `"32f"` — integer values are not coerced.

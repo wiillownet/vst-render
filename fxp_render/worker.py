@@ -40,6 +40,17 @@ def _do_render(job: dict):
     """Shared render path: load preset, set MIDI, render, return audio."""
     import numpy as np
 
+    # Defensive: midi_path + midi_duration are populated together by every
+    # current caller (cli.py, api.ParallelBatchRenderer). Pinning the
+    # contract here means a future caller that forgets midi_duration gets
+    # a clear ValueError rather than `None + float -> TypeError` from a
+    # confusing arithmetic line below.
+    if job["midi_path"] is not None and job["midi_duration"] is None:
+        raise ValueError(
+            "midi_duration must be populated when midi_path is set; "
+            "see the job-dict schema in CLAUDE.md"
+        )
+
     _synth.load_preset(job["preset_path"])
 
     if job["midi_path"] is not None:
