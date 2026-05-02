@@ -4,11 +4,11 @@ Tracked user-visible limitations and upstream quirks. Not every limitation is a 
 
 ---
 
-## Non-ASCII characters in preset paths fail to load
+## Non-ASCII characters in preset paths fail to load (Windows only)
 
 **Symptom:** a render reports `Error: (PluginProcessor::loadPreset) File not found: <path>` even though the file exists on disk. The mangled path shown in the error typically contains a `?` or replacement character where the original had an accented letter, CJK character, emoji, etc.
 
-**Repro:** any `.fxp` whose filename or parent directory contains a character outside the Windows active code page (e.g. `á`, `ä`, `日`, `𝒮`).
+**Repro:** any `.fxp` whose filename or parent directory contains a character outside the Windows active code page (e.g. `á`, `ä`, `日`, `𝒮`). macOS uses UTF-8 paths end-to-end and is unaffected.
 
 **Cause:** DawDreamer's C++ `PluginProcessor::loadPreset` converts the Python `str` path into a narrow `std::string` via the Windows active code page. Characters that can't be represented are dropped/replaced, and the mangled path no longer matches the real file. The Python-side path (via `str(Path(p).resolve())`) is correct Unicode; the mojibake is introduced at the DawDreamer boundary, outside fxp-render.
 
@@ -18,7 +18,7 @@ Tracked user-visible limitations and upstream quirks. Not every limitation is a 
 
 ---
 
-## Long output paths can exceed Windows `MAX_PATH`
+## Long output paths can exceed Windows `MAX_PATH` (Windows only)
 
 **Symptom:** write failure when the rendered output sits very deep in a directory tree, especially when combined with long preset names.
 
@@ -38,7 +38,7 @@ Tracked user-visible limitations and upstream quirks. Not every limitation is a 
 
 ---
 
-## Windows reserved filenames are not filtered
+## Windows reserved filenames are not filtered (Windows only)
 
 **Symptom:** a render succeeds to a file named `CON.wav`, `PRN.wav`, `NUL.wav`, `AUX.wav`, `COM1.wav`–`COM9.wav`, or `LPT1.wav`–`LPT9.wav`, but the file cannot be opened, renamed, or deleted normally on Windows because those names are reserved device names. This includes the same names with any extension, e.g. `CON.anything`.
 

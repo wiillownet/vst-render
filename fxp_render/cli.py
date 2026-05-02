@@ -37,7 +37,7 @@ def _setup_logging(verbose: bool) -> None:
 
 @app.command()
 def render(
-    plugin: Path = typer.Argument(..., help="Path to VST2 plugin .dll (e.g. Serum_x64.dll)."),
+    plugin: Path = typer.Argument(..., help="Path to VST2 plugin: .dll on Windows (e.g. Serum_x64.dll), .vst bundle on macOS (e.g. /Library/Audio/Plug-Ins/VST/Serum.vst)."),
     presets: Path = typer.Argument(..., help="Path to a single .fxp or a directory of them."),
     output: Path = typer.Argument(..., help="Output directory (created if missing)."),
     note: Optional[int] = typer.Option(None, min=0, max=127, help="MIDI note (0-127). Default 48 (C3)."),

@@ -1,14 +1,16 @@
 # fxp-render
 
-Batch-render VST2 `.fxp` presets to audio files using [DawDreamer](https://github.com/DBraun/DawDreamer) as the headless engine. Windows-only; v1 officially supports Serum.
+Batch-render VST2 `.fxp` presets to audio files using [DawDreamer](https://github.com/DBraun/DawDreamer) as the headless engine. Windows and macOS; v1 officially supports Serum.
 
 See [DESIGN.md](DESIGN.md) for the full specification, [CLAUDE.md](CLAUDE.md) for the implementation notes, and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for tracked limitations.
 
 ## Requirements
 
-- Windows (VST2 `.dll` format is Windows-native)
-- Python 3.11 – 3.13
-- A VST2 plugin `.dll` (64-bit — a 32-bit DLL raises `WinError 193` on 64-bit Python). For Serum, point at `C:/Program Files/Common Files/VST3/Serum_x64.dll`, not the 32-bit build in `VST2/`.
+- Windows or macOS
+- Python 3.11 – 3.12 (`pyproject.toml` allows 3.11–3.13, but DawDreamer 0.8.3 only ships wheels through 3.12 as of writing — 3.13 users will see a "no matching distribution" pip error)
+- A VST2 plugin:
+  - **Windows:** 64-bit `.dll`. For Serum, point at `C:/Program Files/Common Files/VST3/Serum_x64.dll`, not the 32-bit build in `VST2/` (a 32-bit DLL raises `WinError 193` on 64-bit Python).
+  - **macOS:** `.vst` bundle. For Serum, `/Library/Audio/Plug-Ins/VST/Serum.vst`. Note: `.fxp` is a VST2 preset format; the `.vst3` and `.component` (Audio Unit) versions of the plugin will not load `.fxp` files even if DawDreamer accepts the path.
 - A valid plugin license present on the machine (DawDreamer does not bypass authorization).
 
 ## Install
@@ -32,9 +34,16 @@ fxp-render PLUGIN PRESETS OUTPUT [OPTIONS]
 Render every `.fxp` under a directory to WAV at 44.1 kHz/16-bit:
 
 ```bash
+# Windows
 fxp-render \
     "C:/Program Files/Common Files/VST3/Serum_x64.dll" \
     "C:/Serum Presets/Leads/" \
+    ./output/
+
+# macOS
+fxp-render \
+    "/Library/Audio/Plug-Ins/VST/Serum.vst" \
+    "~/Documents/Serum Presets/Leads/" \
     ./output/
 ```
 
@@ -85,6 +94,7 @@ audio = render_preset("C:/Presets/lead.fxp", config)
 
 ## Development
 
+Windows:
 ```bash
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -e ".[dev]"
@@ -92,6 +102,16 @@ python -m venv .venv
 .venv/Scripts/python.exe -m pytest tests/test_parallel_smoke.py \
     --plugin-path "C:/Program Files/Common Files/VST3/Serum_x64.dll" \
     --preset-dir "C:/Serum Presets/Leads/"                                         # integration
+```
+
+macOS:
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pytest tests/ --ignore=tests/test_parallel_smoke.py
+.venv/bin/python -m pytest tests/test_parallel_smoke.py \
+    --plugin-path "/Library/Audio/Plug-Ins/VST/Serum.vst" \
+    --preset-dir "$HOME/Documents/Serum Presets/Leads/"
 ```
 
 `scripts/verify_dawdreamer.py` sanity-checks three architectural assumptions (preset hot-swap, bad-path recovery, loky crash recovery) against a real plugin. Re-run it after upgrading DawDreamer or adding plugin support.

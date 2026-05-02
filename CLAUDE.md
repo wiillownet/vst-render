@@ -8,9 +8,9 @@ This file is the implementation context for Claude Code. Read `DESIGN.md` first 
 
 - **Name:** `fxp-render` (package: `fxp_render`, CLI command: `fxp-render`)
 - **Purpose:** Batch render VST2 `.fxp` presets to audio files using DawDreamer as the headless engine
-- **Platform:** Windows only (VST2 `.dll` format)
+- **Platform:** Windows (`.dll`) and macOS (`.vst` bundles). Linux untested. The plugin path on macOS is a bundle directory; `Path.exists()` and DawDreamer's `make_plugin_processor` both accept it.
 - **License:** GPLv3 (inherited from DawDreamer)
-- **Python:** 3.11–3.13
+- **Python:** 3.11–3.13 (DawDreamer 0.8.3 currently has wheels for 3.10–3.12 only; 3.13 users must wait for upstream)
 
 ---
 
