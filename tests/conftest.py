@@ -5,15 +5,18 @@ from pathlib import Path
 
 import pytest
 
-# Typer 0.25 / Click 8.3 render BadParameter messages inside a rich panel,
-# and rich line-wraps the inner text to fit the panel width. On CI runners
-# (narrow / non-TTY terminals) a substring like "duration must be > 0"
-# gets broken across two visible lines, which makes the substring
-# assertions in test_cli.py spuriously fail. Force a wide terminal for
-# the whole test session so the panel fits the message on one line.
-# Direct assignment, not setdefault — CI shells often pre-set COLUMNS
-# to a narrow value that we need to override.
-os.environ["COLUMNS"] = "200"
+# Disable Typer's rich-panel error rendering for the whole test session.
+# Typer 0.25 + Click 8.3 + Rich 15 wrap BadParameter messages into a
+# bordered panel whose layout depends on the terminal mode. On CI
+# runners the panel renders in a degenerate single-line form that drops
+# the inner text entirely — substring assertions like "duration must be
+# > 0" then fail even though the exit code is correct. Plain-text mode
+# emits the same content as a regular line that the assertions can match
+# reliably across local + CI environments.
+from fxp_render.cli import app as _cli_app
+
+_cli_app.rich_markup_mode = None
+_cli_app.pretty_exceptions_enable = False
 
 
 def pytest_addoption(parser):
