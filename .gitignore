@@ -13,3 +13,4 @@ scratch_output/
 .vscode/
 .idea/
 .claude/settings.local.json
+.DS_Store
