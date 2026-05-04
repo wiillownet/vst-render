@@ -7,7 +7,7 @@ See [DESIGN.md](DESIGN.md) for the full specification, [CLAUDE.md](CLAUDE.md) fo
 ## Requirements
 
 - Windows or macOS
-- Python 3.11 – 3.12 (`pyproject.toml` allows 3.11–3.13, but DawDreamer 0.8.3 only ships wheels through 3.12 as of writing — 3.13 users will see a "no matching distribution" pip error)
+- Python 3.11 – 3.12 (`pyproject.toml` upper bound is `<3.13` to match DawDreamer 0.8.3's wheel coverage; 3.13 will be allowed once upstream ships)
 - A VST2 plugin:
   - **Windows:** 64-bit `.dll`. For Serum, point at `C:/Program Files/Common Files/VST3/Serum_x64.dll`, not the 32-bit build in `VST2/` (a 32-bit DLL raises `WinError 193` on 64-bit Python).
   - **macOS:** `.vst` bundle. For Serum, `/Library/Audio/Plug-Ins/VST/Serum.vst`. Note: `.fxp` is a VST2 preset format; the `.vst3` and `.component` (Audio Unit) versions of the plugin will not load `.fxp` files even if DawDreamer accepts the path.
