@@ -5,6 +5,16 @@ from pathlib import Path
 
 import pytest
 
+# Typer 0.25 / Click 8.3 render BadParameter messages inside a rich panel,
+# and rich line-wraps the inner text to fit the panel width. On CI runners
+# (narrow / non-TTY terminals) a substring like "duration must be > 0"
+# gets broken across two visible lines, which makes the substring
+# assertions in test_cli.py spuriously fail. Force a wide terminal for
+# the whole test session so the panel fits the message on one line.
+# Direct assignment, not setdefault — CI shells often pre-set COLUMNS
+# to a narrow value that we need to override.
+os.environ["COLUMNS"] = "200"
+
 
 def pytest_addoption(parser):
     parser.addoption(
