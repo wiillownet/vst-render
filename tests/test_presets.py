@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from fxp_render.presets import discover_presets
+from vst_render.presets import discover_presets
 
 
 def _touch(p: Path) -> None:

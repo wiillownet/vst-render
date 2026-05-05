@@ -3,7 +3,7 @@ from pathlib import Path
 import mido
 import pytest
 
-from fxp_render.utils import get_midi_duration
+from vst_render.utils import get_midi_duration
 
 
 def _make_midi(path: Path, file_type: int, ticks: int = 480) -> None:

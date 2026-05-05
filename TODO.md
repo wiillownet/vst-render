@@ -11,7 +11,7 @@ Document macOS-specific quirks that the May 2026 macOS-support pass didn't inves
 Output: new entries in `KNOWN_ISSUES.md`.
 
 ## Add CI job that installs from git URL
-README documents `pip install git+https://github.com/wiillownet/fxp-render.git` but CI only exercises the editable install. Add a job that runs the git URL install and confirms `fxp-render --help` works — catches packaging regressions.
+README documents `pip install git+https://github.com/wiillownet/vst-render.git` but CI only exercises the editable install. Add a job that runs the git URL install and confirms `vst-render --help` works — catches packaging regressions.
 
 ## VST3 preset support (`.vstpreset`) — blocked on separate Serum 2 investigation
 Move beyond legacy VST2 `.fxp` to `.vstpreset` so Serum 2 (VST3-only) and any post-2024 plugin works. Touches `presets.py`, `worker.py`, CLI plugin-path validation, README, CLAUDE.md.

@@ -13,7 +13,7 @@ import pytest
 # > 0" then fail even though the exit code is correct. Plain-text mode
 # emits the same content as a regular line that the assertions can match
 # reliably across local + CI environments.
-from fxp_render.cli import app as _cli_app
+from vst_render.cli import app as _cli_app
 
 _cli_app.rich_markup_mode = None
 _cli_app.pretty_exceptions_enable = False
@@ -36,18 +36,18 @@ def pytest_addoption(parser):
 
 @pytest.fixture
 def plugin_path(request) -> str:
-    path = request.config.getoption("--plugin-path") or os.environ.get("FXP_PLUGIN_PATH")
+    path = request.config.getoption("--plugin-path") or os.environ.get("VST_PLUGIN_PATH")
     if not path:
-        pytest.skip("No plugin path provided. Set --plugin-path or FXP_PLUGIN_PATH.")
+        pytest.skip("No plugin path provided. Set --plugin-path or VST_PLUGIN_PATH.")
     return str(Path(path).resolve())
 
 
 @pytest.fixture
 def preset_files(request) -> list[str]:
     """Two real `.fxp` files for smoke tests; skips if unavailable."""
-    preset_dir = request.config.getoption("--preset-dir") or os.environ.get("FXP_PRESET_DIR")
+    preset_dir = request.config.getoption("--preset-dir") or os.environ.get("VST_PRESET_DIR")
     if not preset_dir:
-        pytest.skip("No preset dir provided. Set --preset-dir or FXP_PRESET_DIR.")
+        pytest.skip("No preset dir provided. Set --preset-dir or VST_PRESET_DIR.")
     files = sorted(Path(preset_dir).rglob("*.fxp"))[:2]
     if len(files) < 2:
         pytest.skip(f"Need >=2 .fxp files in preset dir, found {len(files)}.")

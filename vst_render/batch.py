@@ -14,7 +14,7 @@ from loky import get_reusable_executor
 
 from .worker import init_worker, render_to_disk, render_to_memory
 
-logger = logging.getLogger("fxp_render")
+logger = logging.getLogger("vst_render")
 
 
 def resolve_worker_count(workers: int) -> int:

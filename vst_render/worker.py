@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-logger = logging.getLogger("fxp_render")
+logger = logging.getLogger("vst_render")
 
 # Module-level globals populated by init_worker, reused for every task.
 _engine = None

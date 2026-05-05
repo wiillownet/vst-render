@@ -14,7 +14,7 @@ from pathlib import Path
 import dawdreamer as daw
 import numpy as np
 
-logger = logging.getLogger("fxp_render")
+logger = logging.getLogger("vst_render")
 
 # -90 dBFS peak; below the 16-bit quantization floor. Matches CLAUDE.md.
 SILENCE_EPS = 3.16e-5

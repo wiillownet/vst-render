@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fxp_render.utils import assign_output_paths, compose_filename
+from vst_render.utils import assign_output_paths, compose_filename
 
 
 def test_compose_simple_preset(tmp_path: Path):

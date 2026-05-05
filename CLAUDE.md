@@ -1,4 +1,4 @@
-# CLAUDE.md — fxp-render Implementation Guide
+# CLAUDE.md — vst-render Implementation Guide
 
 This file is the implementation context for Claude Code. Read `DESIGN.md` first for the full specification. This document covers the *how*: build order, exact API calls, code skeletons, and constraints that the design doc omits because they're not relevant to a human reader.
 
@@ -6,7 +6,7 @@ This file is the implementation context for Claude Code. Read `DESIGN.md` first 
 
 ## Project at a glance
 
-- **Name:** `fxp-render` (package: `fxp_render`, CLI command: `fxp-render`)
+- **Name:** `vst-render` (package: `vst_render`, CLI command: `vst-render`)
 - **Purpose:** Batch render VST2 `.fxp` presets to audio files using DawDreamer as the headless engine
 - **Platform:** Windows (`.dll`) and macOS (`.vst` bundles). Linux untested. The plugin path on macOS is a bundle directory; `Path.exists()` and DawDreamer's `make_plugin_processor` both accept it.
 - **License:** GPLv3 (inherited from DawDreamer)
@@ -19,15 +19,15 @@ This file is the implementation context for Claude Code. Read `DESIGN.md` first 
 Build files in this sequence. Each stage has no dependency on the next:
 
 1. `pyproject.toml` — package metadata and entry point
-2. `fxp_render/__init__.py` — public API exports
-3. `fxp_render/config.py` — `RenderConfig` dataclass (pure Python, no DawDreamer)
-4. `fxp_render/utils.py` — filename sanitization, template composition, MIDI helpers (pure Python)
-5. `fxp_render/presets.py` — preset discovery (pure Python, pathlib only)
-6. `fxp_render/renderer.py` — single-preset render logic (uses DawDreamer)
-7. `fxp_render/worker.py` — loky worker init and task function (uses DawDreamer)
-8. `fxp_render/batch.py` — job construction, loky executor management, progress reporting
-9. `fxp_render/api.py` — `BatchRenderer`, `ParallelBatchRenderer`, `render_preset()` public classes
-10. `fxp_render/cli.py` — Typer app wiring everything together
+2. `vst_render/__init__.py` — public API exports
+3. `vst_render/config.py` — `RenderConfig` dataclass (pure Python, no DawDreamer)
+4. `vst_render/utils.py` — filename sanitization, template composition, MIDI helpers (pure Python)
+5. `vst_render/presets.py` — preset discovery (pure Python, pathlib only)
+6. `vst_render/renderer.py` — single-preset render logic (uses DawDreamer)
+7. `vst_render/worker.py` — loky worker init and task function (uses DawDreamer)
+8. `vst_render/batch.py` — job construction, loky executor management, progress reporting
+9. `vst_render/api.py` — `BatchRenderer`, `ParallelBatchRenderer`, `render_preset()` public classes
+10. `vst_render/cli.py` — Typer app wiring everything together
 
 Write tests alongside each module, not after. Tests for stages 3–5 require no plugin installed. Tests for stages 6–10 are gated behind the plugin availability fixture (see Testing section).
 
@@ -41,7 +41,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "fxp-render"
+name = "vst-render"
 version = "0.1.0"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -54,7 +54,7 @@ dependencies = [
 ]
 
 [project.scripts]
-fxp-render = "fxp_render.cli:app"
+vst-render = "vst_render.cli:app"
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-mock"]
@@ -63,7 +63,7 @@ dev = ["pytest", "pytest-mock"]
 markers = ["slow: integration tests that require a plugin to be installed"]
 ```
 
-The entry point `fxp-render = "fxp_render.cli:app"` wires the `fxp-render` command to the Typer app instance named `app` in `cli.py`.
+The entry point `vst-render = "vst_render.cli:app"` wires the `vst-render` command to the Typer app instance named `app` in `cli.py`.
 
 ---
 
@@ -170,7 +170,7 @@ from __future__ import annotations
 from pathlib import Path       # stdlib — safe at module level
 import logging                 # stdlib — safe at module level
 
-logger = logging.getLogger("fxp_render")
+logger = logging.getLogger("vst_render")
 
 def init_worker(plugin_path: str, sample_rate: int) -> None:
     import dawdreamer as daw   # MUST be first non-stdlib import in this function
@@ -216,7 +216,7 @@ Only `cli.py` configures logging. All library modules use:
 
 ```python
 import logging
-logger = logging.getLogger("fxp_render")
+logger = logging.getLogger("vst_render")
 ```
 
 Never call `logging.basicConfig()`, `logging.setLevel()`, or add handlers anywhere outside `cli.py`.
@@ -261,7 +261,7 @@ from __future__ import annotations
 from pathlib import Path    # stdlib — safe at module level
 import logging
 
-logger = logging.getLogger("fxp_render")
+logger = logging.getLogger("vst_render")
 
 # Module-level globals — populated by init_worker, reused by render_task
 _engine = None
@@ -355,7 +355,7 @@ from pathlib import Path
 from loky import get_reusable_executor
 from .worker import init_worker, render_task
 
-logger = logging.getLogger("fxp_render")
+logger = logging.getLogger("vst_render")
 
 
 def resolve_worker_count(workers: int) -> int:
@@ -587,17 +587,17 @@ def pytest_addoption(parser):
 
 @pytest.fixture
 def plugin_path(request):
-    path = request.config.getoption("--plugin-path") or os.environ.get("FXP_PLUGIN_PATH")
+    path = request.config.getoption("--plugin-path") or os.environ.get("VST_PLUGIN_PATH")
     if not path:
-        pytest.skip("No plugin path provided. Set --plugin-path or FXP_PLUGIN_PATH env var.")
+        pytest.skip("No plugin path provided. Set --plugin-path or VST_PLUGIN_PATH env var.")
     return str(Path(path).resolve())
 
 @pytest.fixture
 def preset_files(request):
     """Returns a list of 2 .fxp preset paths for smoke tests."""
-    preset_dir = request.config.getoption("--preset-dir") or os.environ.get("FXP_PRESET_DIR")
+    preset_dir = request.config.getoption("--preset-dir") or os.environ.get("VST_PRESET_DIR")
     if not preset_dir:
-        pytest.skip("No preset dir provided. Set --preset-dir or FXP_PRESET_DIR env var.")
+        pytest.skip("No preset dir provided. Set --preset-dir or VST_PRESET_DIR env var.")
     files = sorted(Path(preset_dir).glob("*.fxp"))[:2]
     if len(files) < 2:
         pytest.skip(f"Need at least 2 .fxp files in preset dir, found {len(files)}.")
@@ -610,7 +610,7 @@ pytest tests/test_parallel_smoke.py \
     --plugin-path "C:/VSTPlugins/Serum.dll" \
     --preset-dir "C:/Serum Presets/Leads/"
 # or via env vars
-FXP_PLUGIN_PATH="C:/VSTPlugins/Serum.dll" FXP_PRESET_DIR="C:/Presets/" pytest tests/test_parallel_smoke.py
+VST_PLUGIN_PATH="C:/VSTPlugins/Serum.dll" VST_PRESET_DIR="C:/Presets/" pytest tests/test_parallel_smoke.py
 ```
 
 Run unit tests only (no plugin required):
@@ -624,7 +624,7 @@ pytest tests/ --ignore=tests/test_parallel_smoke.py
 # test_parallel_smoke.py
 import pytest
 import numpy as np
-from fxp_render import ParallelBatchRenderer, RenderConfig
+from vst_render import ParallelBatchRenderer, RenderConfig
 
 @pytest.mark.slow
 def test_parallel_render_produces_audio(plugin_path, preset_files):
@@ -652,7 +652,7 @@ def test_parallel_render_produces_audio(plugin_path, preset_files):
 ## Public API exports (`__init__.py`)
 
 ```python
-# fxp_render/__init__.py
+# vst_render/__init__.py
 from .config import RenderConfig
 from .api import BatchRenderer, ParallelBatchRenderer, render_preset
 

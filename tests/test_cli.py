@@ -1,5 +1,5 @@
 """
-CliRunner coverage for fxp_render.cli. These tests never reach the
+CliRunner coverage for vst_render.cli. These tests never reach the
 worker pool — they assert argument parsing, validation, error messaging,
 exit codes, and the --dry-run planning path.
 
@@ -18,7 +18,7 @@ import mido
 import pytest
 from typer.testing import CliRunner
 
-from fxp_render.cli import app
+from vst_render.cli import app
 
 
 runner = CliRunner()

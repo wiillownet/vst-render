@@ -1,11 +1,11 @@
-"""Unit coverage for fxp_render.worker primitives that don't require a
+"""Unit coverage for vst_render.worker primitives that don't require a
 plugin (defensive guards). The full render path is exercised by the
 parallel smoke test."""
 from __future__ import annotations
 
 import pytest
 
-from fxp_render.worker import _do_render
+from vst_render.worker import _do_render
 
 
 def test_do_render_raises_when_midi_path_set_without_duration():

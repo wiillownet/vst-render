@@ -1,8 +1,8 @@
 """
-fxp-render — batch VST2 .fxp preset rendering via DawDreamer.
+vst-render — batch VST2 .fxp preset rendering via DawDreamer.
 
 Public API:
-    from fxp_render import (
+    from vst_render import (
         RenderConfig,
         BatchRenderer,
         ParallelBatchRenderer,
@@ -10,7 +10,7 @@ Public API:
     )
 
 RenderConfig is eager (pure-Python). The renderer classes are exposed
-lazily via PEP 562 __getattr__ so that `import fxp_render.worker`
+lazily via PEP 562 __getattr__ so that `import vst_render.worker`
 inside a loky worker process does NOT transitively import dawdreamer /
 numpy at module level — that import order is enforced inside
 init_worker and must not be preempted.

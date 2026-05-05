@@ -1,4 +1,4 @@
-from fxp_render.utils import sanitize
+from vst_render.utils import sanitize
 
 
 def test_alphanumeric_untouched():

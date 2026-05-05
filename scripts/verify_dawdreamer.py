@@ -1,5 +1,5 @@
 """
-Verify DawDreamer assumptions from CLAUDE.md before building fxp-render.
+Verify DawDreamer assumptions from CLAUDE.md before building vst-render.
 
 This is a throwaway script. Run once with a working Serum install and a
 preset directory. If any assumption fails, the architecture in CLAUDE.md

@@ -22,7 +22,7 @@ from .batch import resolve_worker_count, run_batch_to_disk
 from .presets import discover_presets
 from .utils import assign_output_paths, compose_filename, get_midi_duration
 
-logger = logging.getLogger("fxp_render")
+logger = logging.getLogger("vst_render")
 
 app = typer.Typer(add_completion=False, help="Batch-render VST2 .fxp presets to audio.")
 

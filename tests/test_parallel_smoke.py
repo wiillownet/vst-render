@@ -7,7 +7,7 @@ import mido
 import numpy as np
 import pytest
 
-from fxp_render import ParallelBatchRenderer, RenderConfig
+from vst_render import ParallelBatchRenderer, RenderConfig
 
 
 @pytest.mark.slow

@@ -1,8 +1,8 @@
-# fxp-render — Design Document
+# vst-render — Design Document
 
 ## Overview
 
-`fxp-render` is an open-source Python command-line tool for batch rendering VST2 plugin presets (`.fxp` files) to audio samples using [DawDreamer](https://github.com/DBraun/DawDreamer) as the headless rendering engine. The primary motivation is ML dataset creation, but it is designed to be general-purpose and approachable for any user on Windows. **v1 officially supports Serum (VST2) only.** Support for additional VST2 plugins that use the `.fxp` format is planned — see the Future Considerations section for the testing roadmap.
+`vst-render` is an open-source Python command-line tool for batch rendering VST2 plugin presets (`.fxp` files) to audio samples using [DawDreamer](https://github.com/DBraun/DawDreamer) as the headless rendering engine. The primary motivation is ML dataset creation, but it is designed to be general-purpose and approachable for any user on Windows. **v1 officially supports Serum (VST2) only.** Support for additional VST2 plugins that use the `.fxp` format is planned — see the Future Considerations section for the testing roadmap.
 
 ---
 
@@ -44,8 +44,8 @@
 ## Repository Layout
 
 ```
-fxp-render/
-├── fxp_render/
+vst-render/
+├── vst_render/
 │   ├── __init__.py
 │   ├── cli.py           # Typer app, argument definitions, entry point
 │   ├── renderer.py      # Single-preset render logic (runs inside each worker)
@@ -72,7 +72,7 @@ fxp-render/
 ### Entry Point
 
 ```
-fxp-render [OPTIONS] PLUGIN PRESETS OUTPUT
+vst-render [OPTIONS] PLUGIN PRESETS OUTPUT
 ```
 
 ### Positional Arguments
@@ -106,19 +106,19 @@ fxp-render [OPTIONS] PLUGIN PRESETS OUTPUT
 
 ```bash
 # Minimal — render all presets in a folder with all defaults
-fxp-render "C:/VSTPlugins/Serum.dll" "C:/Serum Presets/Leads/" ./output/
+vst-render "C:/VSTPlugins/Serum.dll" "C:/Serum Presets/Leads/" ./output/
 
 # Custom note and tail
-fxp-render "C:/VSTPlugins/Serum.dll" presets/ output/ --note 60 --tail 3.0
+vst-render "C:/VSTPlugins/Serum.dll" presets/ output/ --note 60 --tail 3.0
 
 # MIDI file mode — use a custom MIDI sequence instead of a single note
-fxp-render "C:/VSTPlugins/Serum.dll" presets/ output/ --midi my_sequence.mid
+vst-render "C:/VSTPlugins/Serum.dll" presets/ output/ --midi my_sequence.mid
 
 # 24-bit output, 6 workers, no subdirectory recursion
-fxp-render "C:/VSTPlugins/Serum.dll" presets/ output/ --bit-depth 24 --workers 6 --no-recurse
+vst-render "C:/VSTPlugins/Serum.dll" presets/ output/ --bit-depth 24 --workers 6 --no-recurse
 
 # Dry run — see what would be rendered
-fxp-render "C:/VSTPlugins/Serum.dll" presets/ output/ --dry-run
+vst-render "C:/VSTPlugins/Serum.dll" presets/ output/ --dry-run
 ```
 
 ---
@@ -264,7 +264,7 @@ When `--midi` is supplied:
 
 ## Raw / Programmatic Output
 
-For users integrating `fxp-render` into another Python project, writing WAV files to disk may be unnecessary overhead. Two mechanisms are provided:
+For users integrating `vst-render` into another Python project, writing WAV files to disk may be unnecessary overhead. Two mechanisms are provided:
 
 ### `--format npy` (CLI flag)
 
@@ -341,7 +341,7 @@ A critical design point: **Serum is loaded once and reused for the entire lifeti
 Boots one Serum instance and reuses it across all renders. No multiprocessing overhead. Best for pipelines that handle their own parallelism or don't need it.
 
 ```python
-from fxp_render import BatchRenderer, RenderConfig
+from vst_render import BatchRenderer, RenderConfig
 
 config = RenderConfig(
     plugin_path="C:/VSTPlugins/Serum.dll",
@@ -364,7 +364,7 @@ Manages a pool of worker processes internally, each with their own warm plugin i
 A key use case is **pre-rendering all presets upfront** for applications like a preset browser, where instant audio playback on selection is required. Rather than rendering on demand (slow), the application renders the entire library once at startup or as a background task, then caches results for instant retrieval.
 
 ```python
-from fxp_render import ParallelBatchRenderer, RenderConfig
+from vst_render import ParallelBatchRenderer, RenderConfig
 
 config = RenderConfig(plugin_path="C:/VSTPlugins/Serum.dll", ...)
 
@@ -387,7 +387,7 @@ with ParallelBatchRenderer(config, workers=-1) as renderer:
 For one-off renders where lifecycle management is not needed. Creates a fresh engine per call — convenient but not suitable for batch use.
 
 ```python
-from fxp_render import render_preset, RenderConfig
+from vst_render import render_preset, RenderConfig
 
 audio = render_preset("C:/Presets/lead.fxp", RenderConfig(...))
 ```
@@ -419,7 +419,7 @@ audio = render_preset("C:/Presets/lead.fxp", RenderConfig(...))
 
 ```toml
 [project]
-name = "fxp-render"
+name = "vst-render"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "dawdreamer",
@@ -433,7 +433,7 @@ dependencies = [
 
 The upper bound `<3.14` reflects that DawDreamer's PyPI wheels are currently published for Python 3.11–3.13. Confirm wheel availability and remove or advance this cap when upgrading Python. Install from GitHub:
 ```bash
-pip install git+https://github.com/<username>/fxp-render.git
+pip install git+https://github.com/<username>/vst-render.git
 ```
 
 ---
@@ -466,7 +466,7 @@ All decisions have been resolved. See the table below for a full record.
 - **Serum requires a valid license** present on the machine. DawDreamer does not bypass plugin authorization.
 - **Large batches consume significant disk space.** 1000 presets × 2-second stereo WAV at 44.1kHz/16-bit ≈ ~350 MB.
 - **`--skip-existing` and collision disambiguation interact.** When two presets map to the same filename, they are disambiguated by appending `_1`, `_2`, etc. in job-construction order. On a re-run with `--skip-existing`, disambiguation is recomputed fresh — if the preset list has changed (files added or removed), suffix assignments may shift, causing the wrong files to be skipped. This is a known limitation; for stable re-runs, ensure the preset list is identical between runs.
-- **The library uses a named logger** (`logging.getLogger("fxp_render")`) and never calls `logging.basicConfig()`. Only the CLI entry point configures logging. Embedders can control output by adding handlers to the `fxp_render` logger without affecting the rest of their application.
+- **The library uses a named logger** (`logging.getLogger("vst_render")`) and never calls `logging.basicConfig()`. Only the CLI entry point configures logging. Embedders can control output by adding handlers to the `vst_render` logger without affecting the rest of their application.
 
 ---
 

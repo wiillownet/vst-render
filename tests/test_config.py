@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from fxp_render.config import RenderConfig
+from vst_render.config import RenderConfig
 
 
 def test_defaults_resolve():

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from fxp_render import BatchRenderer, ParallelBatchRenderer, RenderConfig
+from vst_render import BatchRenderer, ParallelBatchRenderer, RenderConfig
 
 
 # ---- R6: thread-safety guard ---------------------------------------------

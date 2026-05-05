@@ -10,9 +10,9 @@ Tracked user-visible limitations and upstream quirks. Not every limitation is a 
 
 **Repro:** any `.fxp` whose filename or parent directory contains a character outside the Windows active code page (e.g. `á`, `ä`, `日`, `𝒮`). macOS uses UTF-8 paths end-to-end and is unaffected.
 
-**Cause:** DawDreamer's C++ `PluginProcessor::loadPreset` converts the Python `str` path into a narrow `std::string` via the Windows active code page. Characters that can't be represented are dropped/replaced, and the mangled path no longer matches the real file. The Python-side path (via `str(Path(p).resolve())`) is correct Unicode; the mojibake is introduced at the DawDreamer boundary, outside fxp-render.
+**Cause:** DawDreamer's C++ `PluginProcessor::loadPreset` converts the Python `str` path into a narrow `std::string` via the Windows active code page. Characters that can't be represented are dropped/replaced, and the mangled path no longer matches the real file. The Python-side path (via `str(Path(p).resolve())`) is correct Unicode; the mojibake is introduced at the DawDreamer boundary, outside vst-render.
 
-**Workaround:** rename the affected preset files (or the folders containing them) to ASCII before rendering, or pre-copy them to an ASCII-safe temp location and point fxp-render at that. fxp-render itself handles the failure gracefully — the batch continues and these presets show up in the final error summary.
+**Workaround:** rename the affected preset files (or the folders containing them) to ASCII before rendering, or pre-copy them to an ASCII-safe temp location and point vst-render at that. vst-render itself handles the failure gracefully — the batch continues and these presets show up in the final error summary.
 
 **Upstream:** would require DawDreamer to use the wide-char Windows filesystem APIs or pass paths as UTF-8 where supported. Not tracked upstream yet.
 
@@ -22,9 +22,9 @@ Tracked user-visible limitations and upstream quirks. Not every limitation is a 
 
 **Symptom:** write failure when the rendered output sits very deep in a directory tree, especially when combined with long preset names.
 
-**Cause:** Windows `MAX_PATH` is 260 characters for the full path. fxp-render caps the filename *stem* at 196 characters (leaving 4 chars of headroom for `_N` collision suffixes) but does not cap the full path. A user with a deeply nested output directory can still exceed 260.
+**Cause:** Windows `MAX_PATH` is 260 characters for the full path. vst-render caps the filename *stem* at 196 characters (leaving 4 chars of headroom for `_N` collision suffixes) but does not cap the full path. A user with a deeply nested output directory can still exceed 260.
 
-**Workaround:** keep the output directory shallow, use a shorter `--filename-template`, or enable long-path support in Windows (`\\?\` prefix is not applied automatically by fxp-render).
+**Workaround:** keep the output directory shallow, use a shorter `--filename-template`, or enable long-path support in Windows (`\\?\` prefix is not applied automatically by vst-render).
 
 ---
 
@@ -46,7 +46,7 @@ Tracked user-visible limitations and upstream quirks. Not every limitation is a 
 
 **Cause:** `sanitize()` only strips characters outside `[A-Za-z0-9_-]`; it does not special-case Windows device names. They're valid stems as far as the sanitizer is concerned.
 
-**Workaround:** rename the offending preset before rendering, or use a `--filename-template` that always prefixes something (e.g. `fxp_{preset}` or `{folder}_{preset}`) so the output can never land on a bare reserved name. fxp-render may add an explicit filter for these names in a future release.
+**Workaround:** rename the offending preset before rendering, or use a `--filename-template` that always prefixes something (e.g. `fxp_{preset}` or `{folder}_{preset}`) so the output can never land on a bare reserved name. vst-render may add an explicit filter for these names in a future release.
 
 ---
 

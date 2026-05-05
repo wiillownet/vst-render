@@ -1,4 +1,4 @@
-# fxp-render
+# vst-render
 
 Batch-render VST2 `.fxp` presets to audio files using [DawDreamer](https://github.com/DBraun/DawDreamer) as the headless engine. Windows and macOS; v1 officially supports Serum.
 
@@ -16,7 +16,7 @@ See [DESIGN.md](DESIGN.md) for the full specification, [CLAUDE.md](CLAUDE.md) fo
 ## Install
 
 ```bash
-pip install git+https://github.com/wiillownet/fxp-render.git
+pip install git+https://github.com/wiillownet/vst-render.git
 ```
 
 Or from a local checkout:
@@ -28,20 +28,20 @@ pip install -e .
 ## CLI
 
 ```bash
-fxp-render PLUGIN PRESETS OUTPUT [OPTIONS]
+vst-render PLUGIN PRESETS OUTPUT [OPTIONS]
 ```
 
 Render every `.fxp` under a directory to WAV at 44.1 kHz/16-bit:
 
 ```bash
 # Windows
-fxp-render \
+vst-render \
     "C:/Program Files/Common Files/VST3/Serum_x64.dll" \
     "C:/Serum Presets/Leads/" \
     ./output/
 
 # macOS
-fxp-render \
+vst-render \
     "/Library/Audio/Plug-Ins/VST/Serum.vst" \
     "~/Documents/Serum Presets/Leads/" \
     ./output/
@@ -65,12 +65,12 @@ Common options:
 | `--no-recurse` | off | Don't descend into subdirectories. |
 | `--dry-run` | off | Print the render plan and exit. |
 
-Run `fxp-render --help` for the full list.
+Run `vst-render --help` for the full list.
 
 ## Library API
 
 ```python
-from fxp_render import RenderConfig, BatchRenderer, ParallelBatchRenderer, render_preset
+from vst_render import RenderConfig, BatchRenderer, ParallelBatchRenderer, render_preset
 
 config = RenderConfig(
     plugin_path="C:/Program Files/Common Files/VST3/Serum_x64.dll",
