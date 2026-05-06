@@ -19,12 +19,15 @@ from rich.progress import (
 )
 
 from .batch import resolve_worker_count, run_batch_to_disk
-from .presets import discover_presets
+from .presets import PresetFormat, discover_presets
 from .utils import assign_output_paths, compose_filename, get_midi_duration
 
 logger = logging.getLogger("vst_render")
 
-app = typer.Typer(add_completion=False, help="Batch-render VST2 .fxp presets to audio.")
+app = typer.Typer(
+    add_completion=False,
+    help="Batch-render VST presets (.fxp, .SerumPreset) to audio.",
+)
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -37,9 +40,21 @@ def _setup_logging(verbose: bool) -> None:
 
 @app.command()
 def render(
-    plugin: Path = typer.Argument(..., help="Path to VST2 plugin: .dll on Windows (e.g. Serum_x64.dll), .vst bundle on macOS (e.g. /Library/Audio/Plug-Ins/VST/Serum.vst)."),
-    presets: Path = typer.Argument(..., help="Path to a single .fxp or a directory of them."),
+    presets: Path = typer.Argument(..., help="Path to a single preset (.fxp or .SerumPreset) or a directory of them."),
     output: Path = typer.Argument(..., help="Output directory (created if missing)."),
+    fxp: Optional[Path] = typer.Option(
+        None, "--fxp",
+        help="Path to a Serum plugin that loads .fxp presets. VST2 binary "
+             "(.dll on Windows, .vst bundle on macOS) or VST3 build of "
+             "Serum 1 — DawDreamer's load_preset accepts both. Required "
+             "when rendering .fxp files.",
+    ),
+    serum2: Optional[Path] = typer.Option(
+        None, "--serum2",
+        help="Path to the Serum 2 VST3 plugin (.vst3 file on Windows, "
+             ".vst3 bundle on macOS). Required when rendering "
+             ".SerumPreset files.",
+    ),
     note: Optional[int] = typer.Option(None, min=0, max=127, help="MIDI note (0-127). Default 48 (C3)."),
     velocity: int = typer.Option(127, min=1, max=127, help="MIDI velocity (1-127)."),
     duration: float = typer.Option(1.0, help="Note-on duration in seconds (> 0)."),
@@ -79,8 +94,19 @@ def render(
     if fmt not in ("wav", "npy"):
         raise typer.BadParameter(f"--format must be wav or npy (got {fmt!r}).")
 
-    if not plugin.exists():
-        typer.echo(f"Plugin not found: {plugin}", err=True)
+    if fxp is None and serum2 is None:
+        typer.echo(
+            "At least one of --fxp or --serum2 is required.", err=True
+        )
+        raise typer.Exit(code=2)
+    # Path.exists() returns True for VST3 bundle directories on macOS and
+    # for plain .vst3 / .dll / .vst files on Windows + macOS — both shapes
+    # are valid plugin paths, so no is_file() check.
+    if fxp is not None and not fxp.exists():
+        typer.echo(f"Plugin not found: {fxp}", err=True)
+        raise typer.Exit(code=2)
+    if serum2 is not None and not serum2.exists():
+        typer.echo(f"Plugin not found: {serum2}", err=True)
         raise typer.Exit(code=2)
     if not presets.exists():
         typer.echo(f"Presets path not found: {presets}", err=True)
@@ -101,6 +127,31 @@ def render(
             err=True,
         )
         raise typer.Exit(code=0)
+
+    discovered_formats = {fmt_tag for _, fmt_tag in preset_files}
+    provided_formats: set[PresetFormat] = set()
+    if fxp is not None:
+        provided_formats.add(PresetFormat.FXP)
+    if serum2 is not None:
+        provided_formats.add(PresetFormat.SERUM2)
+    missing = discovered_formats - provided_formats
+    if missing:
+        # Map each missing format back to the flag the user needs to pass.
+        flag_for: dict[PresetFormat, str] = {
+            PresetFormat.FXP: "--fxp",
+            PresetFormat.SERUM2: "--serum2",
+        }
+        ext_for: dict[PresetFormat, str] = {
+            PresetFormat.FXP: ".fxp",
+            PresetFormat.SERUM2: ".SerumPreset",
+        }
+        msgs = sorted(
+            f"found {ext_for[m]} files but {flag_for[m]} was not provided"
+            for m in missing
+        )
+        for m in msgs:
+            typer.echo(m, err=True)
+        raise typer.Exit(code=2)
 
     # Single-file mode: presets_root=None so {subpath} collapses out.
     # Resolve when a directory so `relative_to` works against the absolute
@@ -152,7 +203,10 @@ def render(
 
     output.mkdir(parents=True, exist_ok=True)
     n_workers = resolve_worker_count(workers)
-    plugin_str = str(plugin.resolve())
+    # Step B: the worker pool is still single-synth — Step D adds the
+    # dual-synth init that consumes both paths. Hand off whichever path
+    # was provided; preference for --fxp matches the validation order.
+    plugin_str = str((fxp if fxp is not None else serum2).resolve())
 
     # In verbose mode, per-preset DEBUG logs replace the progress bar so
     # the two don't fight for the terminal.

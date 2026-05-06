@@ -20,15 +20,38 @@ from .utils import get_midi_duration
 
 
 def _validate_paths(config: RenderConfig) -> float | None:
-    """Plugin/MIDI existence check at renderer entry. Returns MIDI duration or None."""
-    if not Path(config.plugin_path).exists():
-        raise FileNotFoundError(f"Plugin not found: {config.plugin_path}")
+    """Plugin/MIDI existence check at renderer entry. Returns MIDI duration or None.
+
+    Validates whichever plugin paths are set on the config. The in-process
+    and parallel renderers below still only drive the .fxp synth; Step D
+    of the Serum 2 expansion threads `serum2_plugin_path` through the
+    worker pool. Until then, configs without `fxp_plugin_path` are
+    rejected at first use rather than producing a confusing
+    AttributeError downstream.
+    """
+    if config.fxp_plugin_path is not None and not Path(config.fxp_plugin_path).exists():
+        raise FileNotFoundError(f"Plugin not found: {config.fxp_plugin_path}")
+    if config.serum2_plugin_path is not None and not Path(config.serum2_plugin_path).exists():
+        raise FileNotFoundError(f"Plugin not found: {config.serum2_plugin_path}")
     if config.midi_path is not None:
         midi_path = Path(config.midi_path)
         if not midi_path.exists():
             raise FileNotFoundError(f"MIDI file not found: {midi_path}")
         return get_midi_duration(midi_path)
     return None
+
+
+def _require_fxp_plugin(config: RenderConfig) -> Path:
+    """Until Step D wires up dual-synth workers, the in-process and parallel
+    renderers can only drive the .fxp synth. Reject configs that only set
+    the serum2 path with a clear error rather than a None deref deeper in."""
+    if config.fxp_plugin_path is None:
+        raise NotImplementedError(
+            "BatchRenderer / ParallelBatchRenderer currently require "
+            "fxp_plugin_path. Serum 2 (.SerumPreset) rendering through "
+            "these classes lands in a follow-up; use the CLI in the meantime."
+        )
+    return Path(config.fxp_plugin_path)
 
 
 class BatchRenderer:
@@ -50,8 +73,9 @@ class BatchRenderer:
         # `midi_path`. Cheap insurance against a silent failure mode.
         self._frozen_config = dataclasses.replace(self.config)
         self._midi_duration = _validate_paths(self._frozen_config)
+        fxp_plugin_path = _require_fxp_plugin(self._frozen_config)
         self._engine, self._synth = make_engine(
-            self._frozen_config.plugin_path, self._frozen_config.sample_rate
+            fxp_plugin_path, self._frozen_config.sample_rate
         )
         return self
 
@@ -140,8 +164,9 @@ class ParallelBatchRenderer:
         """Yield `(fxp_path, audio)` as each job completes (unordered)."""
         jobs = self._build_jobs(preset_paths)
         cfg = self._frozen_config
+        fxp_plugin_path = _require_fxp_plugin(cfg)
         for result in iter_batch_to_memory(
-            jobs, self.workers, str(cfg.plugin_path), cfg.sample_rate
+            jobs, self.workers, str(fxp_plugin_path), cfg.sample_rate
         ):
             if result["status"] == "ok":
                 yield result["path"], result["audio"]
@@ -159,7 +184,8 @@ def render_preset(fxp_path: str | Path, config: RenderConfig) -> np.ndarray:
     Not suitable for batch use — each call pays the ~1-2s plugin cold-start.
     """
     _validate_paths_result = _validate_paths(config)
-    engine, synth = make_engine(config.plugin_path, config.sample_rate)
+    fxp_plugin_path = _require_fxp_plugin(config)
+    engine, synth = make_engine(fxp_plugin_path, config.sample_rate)
     return render_one(
         engine,
         synth,

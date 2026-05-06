@@ -31,7 +31,7 @@ def _touch(p: Path, data: bytes = b"") -> None:
 
 @pytest.fixture
 def fake_env(tmp_path: Path):
-    """A dummy plugin file + a nested preset dir — valid CLI inputs for dry-run."""
+    """A dummy fxp plugin file + a nested preset dir — valid CLI inputs for dry-run."""
     plugin = tmp_path / "plugin.dll"
     _touch(plugin)
     presets = tmp_path / "presets"
@@ -52,7 +52,12 @@ def test_note_and_midi_mutually_exclusive(fake_env, tmp_path):
     mid.save(str(midi))
 
     result = runner.invoke(
-        app, [str(plugin), str(presets), str(output), "--note", "60", "--midi", str(midi)]
+        app, [
+            str(presets), str(output),
+            "--fxp", str(plugin),
+            "--note", "60",
+            "--midi", str(midi),
+        ]
     )
     assert result.exit_code != 0
     assert "mutually exclusive" in result.output
@@ -60,7 +65,9 @@ def test_note_and_midi_mutually_exclusive(fake_env, tmp_path):
 
 def test_bad_bit_depth(fake_env):
     plugin, presets, output = fake_env
-    result = runner.invoke(app, [str(plugin), str(presets), str(output), "--bit-depth", "8"])
+    result = runner.invoke(
+        app, [str(presets), str(output), "--fxp", str(plugin), "--bit-depth", "8"]
+    )
     assert result.exit_code != 0
     # Match the explicit BadParameter message, not the help text.
     assert "must be 16, 24, or 32f" in result.output
@@ -68,14 +75,18 @@ def test_bad_bit_depth(fake_env):
 
 def test_bad_format(fake_env):
     plugin, presets, output = fake_env
-    result = runner.invoke(app, [str(plugin), str(presets), str(output), "--format", "mp3"])
+    result = runner.invoke(
+        app, [str(presets), str(output), "--fxp", str(plugin), "--format", "mp3"]
+    )
     assert result.exit_code != 0
     assert "must be wav or npy" in result.output
 
 
 def test_duration_zero_rejected(fake_env):
     plugin, presets, output = fake_env
-    result = runner.invoke(app, [str(plugin), str(presets), str(output), "--duration", "0"])
+    result = runner.invoke(
+        app, [str(presets), str(output), "--fxp", str(plugin), "--duration", "0"]
+    )
     assert result.exit_code != 0
     assert "duration must be > 0" in result.output
 
@@ -84,7 +95,12 @@ def test_tail_zero_accepted_in_dry_run(fake_env):
     # tail=0 is valid (percussive) and must not error out.
     plugin, presets, output = fake_env
     result = runner.invoke(
-        app, [str(plugin), str(presets), str(output), "--tail", "0", "--dry-run"]
+        app, [
+            str(presets), str(output),
+            "--fxp", str(plugin),
+            "--tail", "0",
+            "--dry-run",
+        ]
     )
     assert result.exit_code == 0, result.output
 
@@ -92,21 +108,122 @@ def test_tail_zero_accepted_in_dry_run(fake_env):
 def test_sample_rate_zero_rejected(fake_env):
     plugin, presets, output = fake_env
     result = runner.invoke(
-        app, [str(plugin), str(presets), str(output), "--sample-rate", "0"]
+        app, [
+            str(presets), str(output),
+            "--fxp", str(plugin),
+            "--sample-rate", "0",
+        ]
     )
     assert result.exit_code != 0
     # Typer surfaces `min=1` violations with an "Invalid value" range message.
     assert "Invalid value" in result.output and "sample-rate" in result.output
 
 
-# ---- path validation ------------------------------------------------------
+# ---- plugin-flag validation ----------------------------------------------
 
 
-def test_missing_plugin(tmp_path):
+def test_no_plugin_flag_rejected(tmp_path):
+    """At least one of --fxp or --serum2 is required."""
+    presets = tmp_path / "presets"
+    _touch(presets / "a.fxp")
+    result = runner.invoke(app, [str(presets), str(tmp_path / "out")])
+    assert result.exit_code == 2
+    assert "At least one of --fxp or --serum2" in result.output
+
+
+def test_serum2_files_without_serum2_flag(tmp_path):
+    """Discovering .SerumPreset files without --serum2 must error with a
+    message naming the missing flag, not silently dispatch them through the
+    fxp synth."""
+    plugin = tmp_path / "plugin.dll"
+    _touch(plugin)
+    presets = tmp_path / "presets"
+    _touch(presets / "a.SerumPreset")
+    result = runner.invoke(
+        app, [str(presets), str(tmp_path / "out"), "--fxp", str(plugin)]
+    )
+    assert result.exit_code == 2
+    assert ".SerumPreset" in result.output
+    assert "--serum2" in result.output
+
+
+def test_fxp_files_without_fxp_flag(tmp_path):
+    """Mirror of the previous test: .fxp files require --fxp."""
+    plugin = tmp_path / "plugin.vst3"
+    _touch(plugin)
     presets = tmp_path / "presets"
     _touch(presets / "a.fxp")
     result = runner.invoke(
-        app, [str(tmp_path / "nope.dll"), str(presets), str(tmp_path / "out")]
+        app, [str(presets), str(tmp_path / "out"), "--serum2", str(plugin)]
+    )
+    assert result.exit_code == 2
+    assert ".fxp" in result.output
+    assert "--fxp" in result.output
+
+
+def test_mixed_dir_requires_both_flags(tmp_path):
+    """A directory with both formats requires both flags — providing only
+    one must error out."""
+    plugin = tmp_path / "plugin.dll"
+    _touch(plugin)
+    presets = tmp_path / "presets"
+    _touch(presets / "a.fxp")
+    _touch(presets / "b.SerumPreset")
+    result = runner.invoke(
+        app, [str(presets), str(tmp_path / "out"), "--fxp", str(plugin)]
+    )
+    assert result.exit_code == 2
+    assert "--serum2" in result.output
+
+
+def test_mixed_dir_with_both_flags_passes_validation(tmp_path):
+    """Both formats discovered + both flags provided -> dry-run succeeds."""
+    fxp_plugin = tmp_path / "fxp_plugin.dll"
+    serum2_plugin = tmp_path / "serum2_plugin.vst3"
+    _touch(fxp_plugin)
+    _touch(serum2_plugin)
+    presets = tmp_path / "presets"
+    _touch(presets / "a.fxp")
+    _touch(presets / "b.SerumPreset")
+    result = runner.invoke(
+        app, [
+            str(presets), str(tmp_path / "out"),
+            "--fxp", str(fxp_plugin),
+            "--serum2", str(serum2_plugin),
+            "--dry-run",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    assert "a.fxp" in result.output
+    assert "b.SerumPreset" in result.output
+
+
+# ---- path validation ------------------------------------------------------
+
+
+def test_missing_fxp_plugin(tmp_path):
+    presets = tmp_path / "presets"
+    _touch(presets / "a.fxp")
+    result = runner.invoke(
+        app, [
+            str(presets),
+            str(tmp_path / "out"),
+            "--fxp", str(tmp_path / "nope.dll"),
+        ]
+    )
+    assert result.exit_code == 2
+    assert "Plugin not found" in result.output
+
+
+def test_missing_serum2_plugin(tmp_path):
+    presets = tmp_path / "presets"
+    _touch(presets / "a.SerumPreset")
+    result = runner.invoke(
+        app, [
+            str(presets),
+            str(tmp_path / "out"),
+            "--serum2", str(tmp_path / "nope.vst3"),
+        ]
     )
     assert result.exit_code == 2
     assert "Plugin not found" in result.output
@@ -116,7 +233,11 @@ def test_missing_presets(tmp_path):
     plugin = tmp_path / "plugin.dll"
     _touch(plugin)
     result = runner.invoke(
-        app, [str(plugin), str(tmp_path / "nope"), str(tmp_path / "out")]
+        app, [
+            str(tmp_path / "nope"),
+            str(tmp_path / "out"),
+            "--fxp", str(plugin),
+        ]
     )
     assert result.exit_code == 2
     assert "Presets path not found" in result.output
@@ -126,7 +247,9 @@ def test_output_is_existing_file(fake_env, tmp_path):
     plugin, presets, _ = fake_env
     existing_file = tmp_path / "not_a_dir.txt"
     existing_file.write_bytes(b"hello")
-    result = runner.invoke(app, [str(plugin), str(presets), str(existing_file)])
+    result = runner.invoke(
+        app, [str(presets), str(existing_file), "--fxp", str(plugin)]
+    )
     assert result.exit_code == 2
     assert "not a directory" in result.output
 
@@ -136,7 +259,13 @@ def test_no_preset_files_found_in_presets_dir(tmp_path):
     _touch(plugin)
     empty_presets = tmp_path / "empty_presets"
     empty_presets.mkdir()
-    result = runner.invoke(app, [str(plugin), str(empty_presets), str(tmp_path / "out")])
+    result = runner.invoke(
+        app, [
+            str(empty_presets),
+            str(tmp_path / "out"),
+            "--fxp", str(plugin),
+        ]
+    )
     # Design says: warning + exit 0 when nothing matches.
     assert result.exit_code == 0
     assert "No supported preset files" in result.output
@@ -148,7 +277,11 @@ def test_no_preset_files_found_in_presets_dir(tmp_path):
 def test_missing_midi_file(fake_env, tmp_path):
     plugin, presets, output = fake_env
     result = runner.invoke(
-        app, [str(plugin), str(presets), str(output), "--midi", str(tmp_path / "nope.mid")]
+        app, [
+            str(presets), str(output),
+            "--fxp", str(plugin),
+            "--midi", str(tmp_path / "nope.mid"),
+        ]
     )
     assert result.exit_code == 2
     assert "MIDI file not found" in result.output
@@ -162,7 +295,11 @@ def test_type2_midi_file_clean_error(fake_env, tmp_path):
     mid.save(str(type2_midi))
 
     result = runner.invoke(
-        app, [str(plugin), str(presets), str(output), "--midi", str(type2_midi)]
+        app, [
+            str(presets), str(output),
+            "--fxp", str(plugin),
+            "--midi", str(type2_midi),
+        ]
     )
     assert result.exit_code == 2
     assert "Type 2" in result.output
@@ -177,7 +314,11 @@ def test_corrupt_midi_file_clean_error(fake_env, tmp_path):
     bad.write_bytes(b"not a midi file")
 
     result = runner.invoke(
-        app, [str(plugin), str(presets), str(output), "--midi", str(bad)]
+        app, [
+            str(presets), str(output),
+            "--fxp", str(plugin),
+            "--midi", str(bad),
+        ]
     )
     assert result.exit_code == 2
     assert "Error reading MIDI file" in result.output
@@ -190,7 +331,7 @@ def test_corrupt_midi_file_clean_error(fake_env, tmp_path):
 def test_dry_run_prints_plan_without_rendering(fake_env):
     plugin, presets, output = fake_env
     result = runner.invoke(
-        app, [str(plugin), str(presets), str(output), "--dry-run"]
+        app, [str(presets), str(output), "--fxp", str(plugin), "--dry-run"]
     )
     assert result.exit_code == 0
     out = result.output
@@ -217,9 +358,9 @@ def test_dry_run_with_relative_presets_dir_resolves_subpath(tmp_path, monkeypatc
     result = runner.invoke(
         app,
         [
-            str(plugin),
             "presets",  # relative — the exact shape the bug needed
             "out",
+            "--fxp", str(plugin),
             "--filename-template",
             "{subpath}_{preset}",
             "--dry-run",

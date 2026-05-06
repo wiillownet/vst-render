@@ -20,7 +20,7 @@ def test_batch_renderer_render_rejects_non_main_thread(tmp_path):
     plugin = tmp_path / "plugin.dll"
     plugin.write_bytes(b"")
 
-    cfg = RenderConfig(plugin_path=plugin)
+    cfg = RenderConfig(fxp_plugin_path=plugin)
     r = BatchRenderer(cfg)
     # No __enter__ here — the thread guard fires before the context
     # manager check, so we can verify it without loading DawDreamer.
@@ -54,7 +54,7 @@ def test_parallel_batch_renderer_freezes_config_on_enter(tmp_path):
     plugin = tmp_path / "plugin.dll"
     plugin.write_bytes(b"")
 
-    cfg = RenderConfig(plugin_path=plugin, note=48, velocity=100)
+    cfg = RenderConfig(fxp_plugin_path=plugin, note=48, velocity=100)
     r = ParallelBatchRenderer(cfg, workers=1)
     with r:
         # Pre-mutation: frozen copy matches the originals.
@@ -77,7 +77,7 @@ def test_parallel_batch_renderer_build_jobs_uses_frozen_config(tmp_path):
     plugin = tmp_path / "plugin.dll"
     plugin.write_bytes(b"")
 
-    cfg = RenderConfig(plugin_path=plugin, note=48)
+    cfg = RenderConfig(fxp_plugin_path=plugin, note=48)
     r = ParallelBatchRenderer(cfg, workers=1)
     with r:
         cfg.note = 99  # post-enter mutation
@@ -93,7 +93,7 @@ def test_parallel_batch_renderer_build_jobs_outside_context(tmp_path):
     plugin = tmp_path / "plugin.dll"
     plugin.write_bytes(b"")
 
-    cfg = RenderConfig(plugin_path=plugin)
+    cfg = RenderConfig(fxp_plugin_path=plugin)
     r = ParallelBatchRenderer(cfg, workers=1)
     with pytest.raises(RuntimeError, match="context manager"):
         r._build_jobs([Path("p.fxp")])

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vst-render"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "dawdreamer",
@@ -14,7 +14,16 @@ dependencies = [
     "loky",
     "mido",
     "numpy",
+    # Pinned to a commit SHA so an upstream change can't silently propagate.
+    # Move to a PyPI version pin once the package is published.
+    "serum2-preset-loader @ git+https://github.com/wiillownet/serum-2-preset-loader@1a240f093cabd8fd8e888154d32b884556672897",
 ]
+
+[tool.hatch.metadata]
+# Required so hatchling accepts the git+https reference for
+# `serum2-preset-loader`. Remove once that package is on PyPI and the
+# dep can use a normal version pin.
+allow-direct-references = true
 
 [project.scripts]
 vst-render = "vst_render.cli:app"

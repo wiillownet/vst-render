@@ -7,7 +7,12 @@ from typing import Literal
 
 @dataclass
 class RenderConfig:
-    plugin_path: str | Path
+    # At least one of these must be set. `fxp_plugin_path` accepts either
+    # the VST2 binary or the VST3 build of Serum 1 — DawDreamer's
+    # `load_preset` works on both. `serum2_plugin_path` is Serum 2's VST3
+    # binary and is paired with `synth.load_state` in the worker.
+    fxp_plugin_path: str | Path | None = None
+    serum2_plugin_path: str | Path | None = None
     sample_rate: int = 44100
     note: int = 48
     velocity: int = 127
@@ -18,7 +23,15 @@ class RenderConfig:
     midi_path: str | Path | None = None
 
     def __post_init__(self) -> None:
-        self.plugin_path = Path(self.plugin_path)
+        if self.fxp_plugin_path is None and self.serum2_plugin_path is None:
+            raise ValueError(
+                "RenderConfig requires at least one of fxp_plugin_path or "
+                "serum2_plugin_path to be set."
+            )
+        if self.fxp_plugin_path is not None:
+            self.fxp_plugin_path = Path(self.fxp_plugin_path)
+        if self.serum2_plugin_path is not None:
+            self.serum2_plugin_path = Path(self.serum2_plugin_path)
         if self.midi_path is not None:
             self.midi_path = Path(self.midi_path)
 

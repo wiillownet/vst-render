@@ -13,7 +13,7 @@ from vst_render import ParallelBatchRenderer, RenderConfig
 @pytest.mark.slow
 def test_parallel_render_produces_audio(plugin_path, preset_files):
     config = RenderConfig(
-        plugin_path=plugin_path,
+        fxp_plugin_path=plugin_path,
         sample_rate=44100,
         note=48,
         velocity=127,
@@ -54,7 +54,7 @@ def test_parallel_render_with_midi_file(plugin_path, preset_files, tmp_path):
     sample_rate = 44100
 
     config = RenderConfig(
-        plugin_path=plugin_path,
+        fxp_plugin_path=plugin_path,
         sample_rate=sample_rate,
         midi_path=midi_path,
         tail=tail,
