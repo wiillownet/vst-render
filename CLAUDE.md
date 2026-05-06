@@ -7,10 +7,12 @@ This file is the implementation context for Claude Code. Read `DESIGN.md` first 
 ## Project at a glance
 
 - **Name:** `vst-render` (package: `vst_render`, CLI command: `vst-render`)
-- **Purpose:** Batch render VST2 `.fxp` presets to audio files using DawDreamer as the headless engine
-- **Platform:** Windows (`.dll`) and macOS (`.vst` bundles). Linux untested. The plugin path on macOS is a bundle directory; `Path.exists()` and DawDreamer's `make_plugin_processor` both accept it.
+- **Purpose:** Batch render VST presets to audio files using DawDreamer as the headless engine. v1 supports two preset formats:
+  - `.fxp` (Serum 1, VST2 preset format) — loaded via `synth.load_preset(path)`
+  - `.SerumPreset` (Serum 2, JUCE state-blob format) — converted via `serum2_preset_loader.convert_preset_file(path)` to bytes, written to a per-worker tempfile, then loaded via `synth.load_state(path)`
+- **Platform:** Windows (`.dll`/`.vst3`) and macOS (`.vst` and `.vst3` bundles). Linux untested. The plugin path on macOS is a bundle directory; `Path.exists()` and DawDreamer's `make_plugin_processor` both accept it.
 - **License:** GPLv3 (inherited from DawDreamer)
-- **Python:** 3.11–3.13 (DawDreamer 0.8.3 currently has wheels for 3.10–3.12 only; 3.13 users must wait for upstream)
+- **Python:** 3.11–3.12 (`pyproject.toml` upper bound is `<3.13` to match DawDreamer 0.8.3's wheel coverage; 3.13 users must wait for upstream)
 
 ---
 
@@ -42,7 +44,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vst-render"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "dawdreamer",
@@ -51,6 +53,7 @@ dependencies = [
     "loky",
     "mido",
     "numpy",
+    "serum2-preset-loader @ git+https://github.com/wiillownet/serum-2-preset-loader@<full-40-char-sha>",
 ]
 
 [project.scripts]
@@ -59,9 +62,16 @@ vst-render = "vst_render.cli:app"
 [project.optional-dependencies]
 dev = ["pytest", "pytest-mock"]
 
+[tool.hatch.metadata]
+# `serum2-preset-loader` is git-only until it ships on PyPI; hatch
+# refuses direct URL deps without this opt-in.
+allow-direct-references = true
+
 [tool.pytest.ini_options]
 markers = ["slow: integration tests that require a plugin to be installed"]
 ```
+
+`serum2-preset-loader` must be pinned to a **full 40-character commit SHA**. Pip's partial clone fails on short SHAs with `error: pathspec '<short>' did not match any file(s) known to git`. Resolve via `git log -1 --format="%H" <short-sha>` from the source repo before pinning.
 
 The entry point `vst-render = "vst_render.cli:app"` wires the `vst-render` command to the Typer app instance named `app` in `cli.py`.
 
@@ -87,12 +97,38 @@ synth = engine.make_plugin_processor("serum", str(plugin_path.resolve()))
 engine.load_graph([(synth, [])])
 ```
 
-### Preset loading
+### Preset loading — `.fxp`
 
 ```python
 # Load an .fxp preset — call this between renders, no need to rebuild graph
 synth.load_preset(str(fxp_path.resolve()))  # must be absolute path string
 ```
+
+### Preset loading — `.SerumPreset` (Serum 2)
+
+`.SerumPreset` files are JUCE `IComponent` state blobs (cbor2 + zstandard
+wrapper around the raw VST3 state). DawDreamer can load the inner state
+via `synth.load_state(path)`, but the file on disk is the wrapped form
+that the plugin's preset browser reads — not what `load_state` accepts.
+
+The `serum2_preset_loader.convert_preset_file()` helper performs the
+wrapper unwrap + cbor2 decode + zstd inflate and returns the raw state
+as `bytes`. `load_state` takes a path, not bytes, so the worker writes
+the bytes to a per-worker tempfile and passes that path:
+
+```python
+from serum2_preset_loader import convert_preset_file
+
+state_bytes = convert_preset_file(serum_preset_path)  # returns bytes
+state_path = Path(tempfile.mkdtemp(prefix="vst_render_serum2_")) / "state.bin"
+state_path.write_bytes(state_bytes)
+synth.load_state(str(state_path))  # must be absolute path string
+```
+
+Reuse the same `state_path` for every job in the worker — `write_bytes`
+overwrites in place, and the previous job's blob is never re-read. Do
+not share `state_path` across workers; each loky worker creates its own
+`mkdtemp` directory at init time.
 
 ### MIDI — single note mode
 
@@ -184,25 +220,42 @@ This applies to `worker.py` (inside `init_worker`), `renderer.py` (if using DawD
 
 Threading causes DawDreamer to hang after the first render completes. This is a confirmed bug in DawDreamer's JUCE internals — `insideVSTCallback` and related static variables are not thread-safe. **Use only `multiprocessing` or loky (which uses multiprocessing).** Do not use `threading.Thread`, `concurrent.futures.ThreadPoolExecutor`, or `asyncio` with DawDreamer calls.
 
-### 3. One RenderEngine per worker, created once
+### 3. One RenderEngine per worker, created once. Both synths share the engine.
 
-Never create multiple `RenderEngine` instances inside a loop. Creating engines in a loop causes thread explosion (GitHub Issue #88) and memory leaks (Issue #1). The correct pattern:
+Never create multiple `RenderEngine` instances inside a loop. Creating engines in a loop causes thread explosion (GitHub Issue #88) and memory leaks (Issue #1). When both `.fxp` and `.SerumPreset` rendering is enabled, both synths live in the **same engine's graph** — the idle synth in a shared graph is byte-identical silence relative to a single-synth render (probe 1, verified). The correct pattern:
 
 ```python
-# CORRECT — one engine, created once at worker startup
+# CORRECT — one engine, both synths loaded at worker startup, dispatch on job format
 _engine = None
-_synth = None
+_synth_fxp = None
+_synth_serum2 = None
 
-def init_worker(plugin_path: str, sample_rate: int) -> None:
+def init_worker(fxp_plugin_path: str | None, serum2_plugin_path: str | None,
+                sample_rate: int) -> None:
+    if fxp_plugin_path is None and serum2_plugin_path is None:
+        raise ValueError("init_worker requires at least one plugin path")
     import dawdreamer as daw
-    global _engine, _synth
+    global _engine, _synth_fxp, _synth_serum2
     _engine = daw.RenderEngine(sample_rate, 512)
-    _synth = _engine.make_plugin_processor("plugin", plugin_path)
-    _engine.load_graph([(_synth, [])])
+    processors = []
+    if fxp_plugin_path is not None:
+        _synth_fxp = _engine.make_plugin_processor("fxp_synth", fxp_plugin_path)
+        processors.append((_synth_fxp, []))
+    if serum2_plugin_path is not None:
+        _synth_serum2 = _engine.make_plugin_processor("serum2_synth", serum2_plugin_path)
+        processors.append((_synth_serum2, []))
+    _engine.load_graph(processors)
 
 def render_task(job: dict) -> dict:
-    # reuses _engine and _synth — no recreation
-    _synth.load_preset(job["preset_path"])
+    # Dispatch on preset_format; the unused synth stays idle (silent in graph).
+    if job["preset_format"] == "fxp":
+        _synth_fxp.load_preset(job["preset_path"])
+        synth = _synth_fxp
+    else:  # "serum2"
+        state = convert_preset_file(job["preset_path"])
+        _serum_state_path.write_bytes(state)
+        _synth_serum2.load_state(str(_serum_state_path))
+        synth = _synth_serum2
     ...
 ```
 
@@ -261,35 +314,66 @@ Every job passed to `render_task` must have these keys. `batch.py` is responsibl
 from __future__ import annotations
 from pathlib import Path    # stdlib — safe at module level
 import logging
+import tempfile
 
 logger = logging.getLogger("vst_render")
 
 # Module-level globals — populated by init_worker, reused by render_task
 _engine = None
-_synth = None
+_synth_fxp = None
+_synth_serum2 = None
+_serum_state_path: Path | None = None  # per-worker tempfile for serum2 state blobs
 
 
-def init_worker(plugin_path: str, sample_rate: int) -> None:
-    """Called once per worker process by loky. Sets up DawDreamer engine."""
+def init_worker(fxp_plugin_path: str | None,
+                serum2_plugin_path: str | None,
+                sample_rate: int) -> None:
+    """Called once per worker by loky. Builds one engine + one or both synths."""
+    # Validate BEFORE the dawdreamer import so a unit test can exercise this
+    # guard without paying the import cost (and without violating the
+    # import-order constraint in test processes that already loaded numpy).
+    if fxp_plugin_path is None and serum2_plugin_path is None:
+        raise ValueError("init_worker requires at least one plugin path")
+
     import dawdreamer as daw  # MUST be first non-stdlib import
     import numpy as np        # imported here (after dawdreamer) to ensure load order
-                              # even though this function doesn't use numpy directly
-    global _engine, _synth
-    # plugin_path is resolved to absolute by init_worker — DawDreamer silently fails with relative paths
-    resolved = str(Path(plugin_path).resolve())
+
+    global _engine, _synth_fxp, _synth_serum2, _serum_state_path
     _engine = daw.RenderEngine(sample_rate, 512)
-    _synth = _engine.make_plugin_processor("plugin", resolved)
-    _engine.load_graph([(_synth, [])])
-    logger.debug("Worker initialized with plugin: %s", resolved)
+
+    processors = []
+    if fxp_plugin_path is not None:
+        _synth_fxp = _engine.make_plugin_processor(
+            "fxp_synth", str(Path(fxp_plugin_path).resolve())
+        )
+        processors.append((_synth_fxp, []))
+    if serum2_plugin_path is not None:
+        _synth_serum2 = _engine.make_plugin_processor(
+            "serum2_synth", str(Path(serum2_plugin_path).resolve())
+        )
+        processors.append((_synth_serum2, []))
+    _engine.load_graph(processors)
+
+    # Per-worker tempfile for the serum2 state.bin round-trip. Reused for
+    # every serum2 job — write_bytes overwrites in place.
+    _serum_state_path = Path(tempfile.mkdtemp(prefix="vst_render_serum2_")) / "state.bin"
+
+    # Warmup render: Serum 2 lazy-loads sample data on first render and the
+    # cold render comes out at ~10x steady-state level. A 0.1s render here
+    # absorbs that anomaly inside init so the user's first job is correct.
+    for synth in (_synth_fxp, _synth_serum2):
+        if synth is None:
+            continue
+        synth.clear_midi()
+        synth.add_midi_note(48, 127, 0.0, 0.05)
+        _engine.render(0.1)
 
 
 def render_task(job: dict) -> dict:
     """
-    Render one preset. Called by loky worker. Returns result dict.
-
-    Required job keys: preset_path, output_path, note, velocity, duration,
-    tail, midi_path, midi_duration, sample_rate, bit_depth, format, skip_existing.
-    See job dict schema in CLAUDE.md.
+    Render one preset. Dispatches on job["preset_format"]: "fxp" -> load_preset,
+    "serum2" -> convert_preset_file + load_state. Required job keys: see the
+    job dict schema in CLAUDE.md.
     """
     import numpy as np
 
@@ -300,15 +384,29 @@ def render_task(job: dict) -> dict:
         if job["skip_existing"] and Path(output_path).exists():
             return {"status": "skipped", "path": preset_path}
 
-        _synth.load_preset(preset_path)
+        fmt = job["preset_format"]
+        if fmt == "fxp":
+            if _synth_fxp is None:
+                raise RuntimeError("worker has no fxp synth")
+            synth = _synth_fxp
+            synth.load_preset(preset_path)
+        elif fmt == "serum2":
+            if _synth_serum2 is None:
+                raise RuntimeError("worker has no serum2 synth")
+            from serum2_preset_loader import convert_preset_file  # deferred — worker contract
+            synth = _synth_serum2
+            _serum_state_path.write_bytes(convert_preset_file(preset_path))
+            synth.load_state(str(_serum_state_path))
+        else:
+            raise ValueError(f"Unknown preset_format: {fmt!r}")
 
         if job["midi_path"] is not None:
-            _synth.load_midi(job["midi_path"], clear_previous=True,
-                             beats=False, all_events=True)
+            synth.load_midi(job["midi_path"], clear_previous=True,
+                            beats=False, all_events=True)
             render_duration = job["midi_duration"] + job["tail"]
         else:
-            _synth.clear_midi()
-            _synth.add_midi_note(job["note"], job["velocity"], 0.0, job["duration"])
+            synth.clear_midi()
+            synth.add_midi_note(job["note"], job["velocity"], 0.0, job["duration"])
             render_duration = job["duration"] + job["tail"]
 
         _engine.render(render_duration)
@@ -345,16 +443,16 @@ def _write_audio(audio, output_path: str, sample_rate: int,
 
 ### batch.py
 
-`_run_batch` is a private helper function (underscore-prefixed per Python convention). `ParallelBatchRenderer` in `api.py` wraps `_run_batch` and manages the executor lifecycle via the context manager protocol (`__enter__`/`__exit__`). Callers never call `_run_batch` directly.
+`run_batch_to_disk` (CLI path) and `iter_batch_to_memory` (library path) both go through the private `_get_executor` helper, which is the single point that hands `init_worker` to loky. Callers from `api.py` and `cli.py` use the public functions; nothing calls the executor directly.
 
 ```python
 # batch.py — loky executor management
 from __future__ import annotations
 import os
 import logging
-from pathlib import Path
+from concurrent.futures import as_completed
 from loky import get_reusable_executor
-from .worker import init_worker, render_task
+from .worker import init_worker, render_to_disk, render_to_memory
 
 logger = logging.getLogger("vst_render")
 
@@ -365,39 +463,53 @@ def resolve_worker_count(workers: int) -> int:
     return max(1, workers)
 
 
-def _run_batch(jobs: list[dict], workers: int, plugin_path: str,
-               sample_rate: int) -> list[dict]:
-    """Private helper. Submit jobs to loky worker pool, return results.
-    Called by ParallelBatchRenderer — do not call directly.
-    Path resolution for plugin_path is handled inside init_worker."""
-    n_workers = resolve_worker_count(workers)
-    # timeout=1800: workers idle for 30 minutes are shut down.
-    # Lower values cause unexpected cold starts for interactive/long-running callers.
-    executor = get_reusable_executor(
-        max_workers=n_workers,
+def _get_executor(workers: int, fxp_plugin_path: str | None,
+                  serum2_plugin_path: str | None, sample_rate: int):
+    """Either plugin path may be None; init_worker requires at least one set.
+    timeout=1800: workers idle for 30 minutes are shut down. Lower values
+    cause unexpected cold starts for interactive/long-running callers."""
+    return get_reusable_executor(
+        max_workers=resolve_worker_count(workers),
         initializer=init_worker,
-        initargs=(plugin_path, sample_rate),
+        initargs=(fxp_plugin_path, serum2_plugin_path, sample_rate),
         timeout=1800,
     )
-    futures = [executor.submit(render_task, job) for job in jobs]
-    results = []
-    for future in futures:
+
+
+def run_batch_to_disk(jobs, workers, fxp_plugin_path, serum2_plugin_path,
+                      sample_rate, on_result=None) -> list[dict]:
+    """CLI entry: submit every job, return results in input order.
+    Per-job errors become `{"status": "error", ...}` dicts."""
+    executor = _get_executor(workers, fxp_plugin_path, serum2_plugin_path, sample_rate)
+    futures = {executor.submit(render_to_disk, job): idx for idx, job in enumerate(jobs)}
+    results: list[dict | None] = [None] * len(jobs)
+    for future in as_completed(futures):
+        idx = futures[future]
         try:
-            results.append(future.result())
+            result = future.result()
         except Exception as exc:
             logger.error("Worker error: %s", exc)
-            results.append({"status": "error", "error": str(exc)})
+            result = {"status": "error", "path": jobs[idx].get("preset_path"),
+                      "error": str(exc)}
+        results[idx] = result
+        if on_result is not None:
+            on_result(result)
     return results
 ```
 
 ---
 
-## CLI mutual exclusion pattern (`--note` vs `--midi`)
+## CLI dispatch and validation
 
-Typer cannot distinguish a user-supplied `--note 48` from the default `48`. Use `None` as the sentinel default. The mutual exclusion check only needs `note` and `midi` — no Click context required:
+The CLI is **format-driven**, not plugin-driven: the user names the formats they're rendering via `--fxp` and `--serum2`, and the worker pool is wired with whichever subset matches. The four checks below are all in `cli.py` and run in this order:
+
+1. **At least one of `--fxp` / `--serum2` must be set** (else exit 2). Allowing neither would just bottom out in `init_worker`'s ValueError later — front-load the error.
+2. **Each provided plugin path must exist** (else exit 2). `Path.exists()` is the right check — VST3 bundles on macOS are directories, plain `.dll` / `.vst3` / `.vst` are files; both are valid.
+3. **Discovered preset formats must be a subset of provided plugin formats.** A directory of `.fxp` files passed without `--fxp`, or `.SerumPreset` files without `--serum2`, must fail at start-up rather than mid-batch. The error names the missing flag, e.g. `found .SerumPreset files but --serum2 was not provided`.
+4. **`--note` vs `--midi` mutual exclusion.** Typer cannot distinguish a user-supplied `--note 48` from the default `48`, so `note` defaults to `None` as a sentinel; the mutual-exclusion check uses `note is not None`.
 
 ```python
-# cli.py
+# cli.py — pattern only, see vst_render/cli.py for the real version
 import typer
 from typing import Optional
 from pathlib import Path
@@ -406,25 +518,26 @@ app = typer.Typer()
 
 @app.command()
 def render(
-    plugin: Path = typer.Argument(...),
     presets: Path = typer.Argument(...),
     output: Path = typer.Argument(...),
+    fxp: Optional[Path] = typer.Option(None, "--fxp"),
+    serum2: Optional[Path] = typer.Option(None, "--serum2"),
     note: Optional[int] = typer.Option(None, help="MIDI note (0-127). Default: 48 (C3)."),
     midi: Optional[Path] = typer.Option(None, help="Path to .mid file."),
     # ... other options
 ):
-    # Manual mutual exclusion check — Typer cannot do this automatically
+    # check 1
+    if fxp is None and serum2 is None:
+        typer.echo("At least one of --fxp or --serum2 is required.", err=True)
+        raise typer.Exit(code=2)
+    # check 4 — sentinel pattern; resolve default afterwards
     if midi is not None and note is not None:
-        raise typer.BadParameter(
-            "--note and --midi are mutually exclusive. "
-            "Use --midi to render a MIDI sequence, or --note to render a single note."
-        )
-    # Resolve default after exclusion check
+        raise typer.BadParameter("--note and --midi are mutually exclusive.")
     if note is None:
         note = 48
 ```
 
-Note: `typer.Context` is injected by parameter type annotation alone (no `typer.Option` wrapper). It is not needed here since the check only uses `note` and `midi`.
+Note: `typer.Context` is injected by parameter type annotation alone (no `typer.Option` wrapper). It is not needed here since the format-validation checks only use `fxp`, `serum2`, `note`, and `midi`.
 
 ---
 
@@ -556,96 +669,85 @@ def get_midi_duration(midi_path: Path) -> float:
 
 ```
 tests/
-├── conftest.py              # shared fixtures including plugin_available skip
+├── conftest.py              # fxp_plugin_path / serum2_plugin_path / preset_files / serum_preset_files fixtures
 ├── test_sanitize.py         # sanitize(), compose_filename()
 ├── test_filename.py         # assign_output_paths(), collision handling, {subpath} edge cases
-├── test_presets.py          # discover_presets(), single file vs directory, --no-recurse
+├── test_presets.py          # discover_presets() — both formats, single file vs directory, --no-recurse
 ├── test_midi.py             # get_midi_duration(), Type 2 error, valid files
-└── test_parallel_smoke.py   # integration: end-to-end render, requires plugin
+├── test_worker.py           # _do_render dispatch + format guards (no plugin required, mocked synth)
+├── test_parallel_smoke.py   # integration: .fxp end-to-end (regression)
+└── test_serum2_smoke.py     # integration: serum2-only + mixed-format acceptance gate
 ```
 
-### Plugin availability fixture
+### Plugin/preset availability fixtures
+
+Each fixture is gated independently on its own option/env-var pair, so a user with only one plugin still runs the smoke half they have plumbing for.
 
 ```python
 # conftest.py
-import pytest
-import os
+import pytest, os
 from pathlib import Path
 
 def pytest_addoption(parser):
-    parser.addoption(
-        "--plugin-path",
-        action="store",
-        default=None,
-        help="Path to Serum VST2 .dll for integration tests",
-    )
-    parser.addoption(
-        "--preset-dir",
-        action="store",
-        default=None,
-        help="Directory containing .fxp presets for integration tests",
-    )
+    parser.addoption("--fxp-plugin-path", default=None,
+        help="Path to a Serum 1 plugin (loads .fxp).")
+    parser.addoption("--serum2-plugin-path", default=None,
+        help="Path to the Serum 2 VST3 (loads .SerumPreset).")
+    parser.addoption("--preset-dir", default=None,
+        help="Directory containing .fxp presets.")
+    parser.addoption("--serum-preset-dir", default=None,
+        help="Directory containing .SerumPreset files.")
 
-@pytest.fixture
-def plugin_path(request):
-    path = request.config.getoption("--plugin-path") or os.environ.get("VST_PLUGIN_PATH")
-    if not path:
-        pytest.skip("No plugin path provided. Set --plugin-path or VST_PLUGIN_PATH env var.")
-    return str(Path(path).resolve())
-
-@pytest.fixture
-def preset_files(request):
-    """Returns a list of 2 .fxp preset paths for smoke tests."""
-    preset_dir = request.config.getoption("--preset-dir") or os.environ.get("VST_PRESET_DIR")
-    if not preset_dir:
-        pytest.skip("No preset dir provided. Set --preset-dir or VST_PRESET_DIR env var.")
-    files = sorted(Path(preset_dir).glob("*.fxp"))[:2]
-    if len(files) < 2:
-        pytest.skip(f"Need at least 2 .fxp files in preset dir, found {len(files)}.")
-    return [str(f) for f in files]
+# Each fixture skips with a hint if its option / env var pair is unset.
+# Env vars: VST_FXP_PLUGIN_PATH, VST_SERUM2_PLUGIN_PATH, VST_PRESET_DIR,
+#           VST_SERUM_PRESET_DIR.
 ```
 
 Run integration tests:
 ```bash
-pytest tests/test_parallel_smoke.py \
-    --plugin-path "C:/VSTPlugins/Serum.dll" \
-    --preset-dir "C:/Serum Presets/Leads/"
-# or via env vars
-VST_PLUGIN_PATH="C:/VSTPlugins/Serum.dll" VST_PRESET_DIR="C:/Presets/" pytest tests/test_parallel_smoke.py
+pytest tests/test_parallel_smoke.py tests/test_serum2_smoke.py \
+    --fxp-plugin-path "/Library/Audio/Plug-Ins/VST/Serum.vst" \
+    --serum2-plugin-path "/Library/Audio/Plug-Ins/VST3/Serum2.vst3" \
+    --preset-dir "/Library/Audio/Presets/Xfer Records/Serum Presets/Presets/Misc" \
+    --serum-preset-dir "/Library/Audio/Presets/Xfer Records/Serum 2 Presets/Presets/Factory/Piano"
 ```
 
 Run unit tests only (no plugin required):
 ```bash
-pytest tests/ --ignore=tests/test_parallel_smoke.py
+pytest tests/ --ignore=tests/test_parallel_smoke.py --ignore=tests/test_serum2_smoke.py
 ```
 
-### Smoke test outline
+### Smoke test outlines
 
+`test_parallel_smoke.py` exercises the public library API (`.fxp`-only):
 ```python
-# test_parallel_smoke.py
-import pytest
-import numpy as np
-from vst_render import ParallelBatchRenderer, RenderConfig
-
 @pytest.mark.slow
-def test_parallel_render_produces_audio(plugin_path, preset_files):
-    """Smoke test: render 2 presets in parallel, verify non-silent stereo output."""
+def test_parallel_render_produces_audio(fxp_plugin_path, preset_files):
     config = RenderConfig(
-        plugin_path=plugin_path,
-        sample_rate=44100,
-        note=48,
-        velocity=127,
-        duration=1.0,
-        tail=1.0,
+        fxp_plugin_path=fxp_plugin_path, sample_rate=44100,
+        note=48, velocity=127, duration=1.0, tail=1.0,
     )
     with ParallelBatchRenderer(config, workers=2) as renderer:
         results = renderer.render_batch(preset_files)
+    # ... non-silent / stereo / float32 assertions
+```
 
-    assert len(results) == len(preset_files)
-    for fxp_path, audio in results.items():
-        assert audio.shape[0] == 2              # stereo
-        assert audio.dtype == np.float32
-        assert np.max(np.abs(audio)) > 3.16e-5  # not silent
+`test_serum2_smoke.py` drives `run_batch_to_disk` directly (the public library API is gated to fxp-only at 0.2.0; `run_batch_to_disk` is the path the CLI uses and is the only entry that accepts mixed-format batches):
+```python
+@pytest.mark.slow
+def test_mixed_format_smoke(fxp_plugin_path, serum2_plugin_path,
+                            preset_files, serum_preset_files, tmp_path):
+    jobs = [
+        _make_job(preset_path=preset_files[0], preset_format="fxp",  output_path=...),
+        _make_job(preset_path=serum_preset_files[0], preset_format="serum2", output_path=...),
+    ]
+    results = run_batch_to_disk(
+        jobs=jobs, workers=2,
+        fxp_plugin_path=fxp_plugin_path,
+        serum2_plugin_path=serum2_plugin_path,
+        sample_rate=44100,
+    )
+    # ... per-job status==ok + stereo / non-silent assertions
 ```
 
 ---
@@ -678,6 +780,10 @@ __all__ = [
 - **Don't call `engine.load_graph()` on every render.** Build the graph once in `init_worker`; `load_preset()` updates the processor state in-place.
 - **Don't use VST3 `.dll` or `.vst3` paths with `.fxp` presets.** DawDreamer silently ignores `.fxp` when loaded as VST3 — no error, just wrong output.
 - **Don't assume a `.dll` in the VST2 folder is 64-bit.** On Windows, Serum's installer puts the 32-bit VST2 at `C:/Program Files/Common Files/VST2/Serum.dll` and the 64-bit VST2 at `C:/Program Files/Common Files/VST3/Serum_x64.dll` (yes, a VST2 `.dll` in the `VST3/` folder — the actual VST3 is the adjacent `Serum.vst3` bundle). Loading a 32-bit DLL from 64-bit Python raises `OSError [WinError 193] %1 is not a valid Win32 application`; DawDreamer surfaces this as `RuntimeError: Unable to load plugin.` with no hint as to why. Point users at the `_x64.dll`.
+- **Don't pass the raw `.SerumPreset` bytes to `synth.load_state`.** The on-disk file is the wrapped form (cbor2 + zstandard); `load_state` wants the inner state. Always go through `serum2_preset_loader.convert_preset_file()` first.
+- **Don't import `serum2_preset_loader` at module level.** It's pure-Python (no LLVM), so the import-order constraint isn't load-bearing — but `worker.py`'s contract is "stdlib only at module level, everything else deferred". Adding a non-stdlib top-level import here erodes a guarantee that `init_worker` validation tests rely on. Defer it inside `init_worker` and `_do_render`.
+- **Don't share the serum2 `state.bin` path across workers.** Each loky worker creates its own `mkdtemp` directory in `init_worker`. Sharing one path means workers stomp on each other's writes mid-render. The path lives in a per-worker module global by design.
+- **Don't drop the warmup render in `init_worker`.** Serum 2 lazy-loads sample data on first render; without the warmup, the first job in each worker comes out at ~10× steady-state level. Remove it only if you have direct evidence the upstream lazy-load is gone.
 
 ---
 

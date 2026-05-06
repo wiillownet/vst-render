@@ -1,6 +1,6 @@
 # vst-render
 
-Batch-render VST2 `.fxp` presets to audio files using [DawDreamer](https://github.com/DBraun/DawDreamer) as the headless engine. Windows and macOS; v1 officially supports Serum.
+Batch-render VST presets to audio files using [DawDreamer](https://github.com/DBraun/DawDreamer) as the headless engine. Windows and macOS; v1 officially supports Serum 1 (`.fxp`) and Serum 2 (`.SerumPreset`).
 
 See [DESIGN.md](DESIGN.md) for the full specification, [CLAUDE.md](CLAUDE.md) for the implementation notes, and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for tracked limitations.
 
@@ -8,9 +8,15 @@ See [DESIGN.md](DESIGN.md) for the full specification, [CLAUDE.md](CLAUDE.md) fo
 
 - Windows or macOS
 - Python 3.11 – 3.12 (`pyproject.toml` upper bound is `<3.13` to match DawDreamer 0.8.3's wheel coverage; 3.13 will be allowed once upstream ships)
-- A VST2 plugin:
-  - **Windows:** 64-bit `.dll`. For Serum, point at `C:/Program Files/Common Files/VST3/Serum_x64.dll`, not the 32-bit build in `VST2/` (a 32-bit DLL raises `WinError 193` on 64-bit Python).
-  - **macOS:** `.vst` bundle. For Serum, `/Library/Audio/Plug-Ins/VST/Serum.vst`. Note: `.fxp` is a VST2 preset format; the `.vst3` and `.component` (Audio Unit) versions of the plugin will not load `.fxp` files even if DawDreamer accepts the path.
+- One or both of:
+  - **A Serum 1 plugin** for `.fxp` presets:
+    - Windows: 64-bit `.dll`. Point at `C:/Program Files/Common Files/VST3/Serum_x64.dll` — not the 32-bit build under `VST2/`, which raises `WinError 193` on 64-bit Python.
+    - macOS: `.vst` bundle, e.g. `/Library/Audio/Plug-Ins/VST/Serum.vst`.
+    - Note: `.fxp` is a VST2 preset format. The `.vst3` and `.component` (Audio Unit) versions of Serum 1 will not load `.fxp` files even if DawDreamer accepts the path.
+  - **The Serum 2 VST3** for `.SerumPreset` presets:
+    - Windows: `Serum2.vst3`.
+    - macOS: `/Library/Audio/Plug-Ins/VST3/Serum2.vst3` (a `.vst3` bundle).
+    - Serum 2 stores presets in JUCE `IComponent` state-blob form (cbor2 + zstandard), which vst-render decodes via the [`serum2-preset-loader`](https://github.com/wiillownet/serum-2-preset-loader) library before handing the bytes to `synth.load_state`.
 - A valid plugin license present on the machine (DawDreamer does not bypass authorization).
 
 ## Install
@@ -28,29 +34,51 @@ pip install -e .
 ## CLI
 
 ```bash
-vst-render PLUGIN PRESETS OUTPUT [OPTIONS]
+vst-render PRESETS OUTPUT --fxp <plugin> [--serum2 <plugin>] [OPTIONS]
 ```
 
-Render every `.fxp` under a directory to WAV at 44.1 kHz/16-bit:
+Pass `--fxp` for `.fxp` presets, `--serum2` for `.SerumPreset` presets, or both for a mixed batch. At least one is required, and every preset format encountered in the input must have its corresponding flag — running over a directory containing both formats with only `--fxp` set is rejected at start-up rather than mid-batch.
+
+Render every `.fxp` under a directory:
 
 ```bash
 # Windows
 vst-render \
-    "C:/Program Files/Common Files/VST3/Serum_x64.dll" \
     "C:/Serum Presets/Leads/" \
-    ./output/
+    ./output/ \
+    --fxp "C:/Program Files/Common Files/VST3/Serum_x64.dll"
 
 # macOS
 vst-render \
-    "/Library/Audio/Plug-Ins/VST/Serum.vst" \
     "~/Documents/Serum Presets/Leads/" \
-    ./output/
+    ./output/ \
+    --fxp "/Library/Audio/Plug-Ins/VST/Serum.vst"
+```
+
+Render `.SerumPreset` files (Serum 2 only):
+
+```bash
+# macOS
+vst-render \
+    "~/Documents/Serum 2 Presets/Pads/" \
+    ./output/ \
+    --serum2 "/Library/Audio/Plug-Ins/VST3/Serum2.vst3"
+```
+
+Mixed-format directory (one batch hits both engines):
+
+```bash
+vst-render ~/all-presets/ ./output/ \
+    --fxp "/Library/Audio/Plug-Ins/VST/Serum.vst" \
+    --serum2 "/Library/Audio/Plug-Ins/VST3/Serum2.vst3"
 ```
 
 Common options:
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
+| `--fxp` | — | Path to a Serum 1 plugin that loads `.fxp`. Required if any input is `.fxp`. |
+| `--serum2` | — | Path to the Serum 2 VST3. Required if any input is `.SerumPreset`. |
 | `--note` | `48` | MIDI note (0–127). Mutually exclusive with `--midi`. |
 | `--velocity` | `127` | MIDI velocity (1–127). |
 | `--duration` | `1.0` | Note-on duration (s). |
@@ -67,13 +95,23 @@ Common options:
 
 Run `vst-render --help` for the full list.
 
+## Migrating from 0.1.x
+
+vst-render 0.2.0 reworks the plugin-path interface for Serum 2 support:
+
+- **CLI:** the leading `PLUGIN` positional argument was replaced with the named flags `--fxp` and `--serum2`. Old: `vst-render <plugin> <presets> <output>`. New: `vst-render <presets> <output> --fxp <plugin>`.
+- **Library:** `RenderConfig.plugin_path` was renamed to `RenderConfig.fxp_plugin_path`, and a `serum2_plugin_path` field was added. Existing 0.1.x code passing `plugin_path=` will raise `TypeError: unexpected keyword argument`.
+- **Tests / fixtures:** `--plugin-path` and `VST_PLUGIN_PATH` were renamed to `--fxp-plugin-path` and `VST_FXP_PLUGIN_PATH`.
+
+There is no compatibility shim — call sites need a one-time edit. Sorry.
+
 ## Library API
 
 ```python
 from vst_render import RenderConfig, BatchRenderer, ParallelBatchRenderer, render_preset
 
 config = RenderConfig(
-    plugin_path="C:/Program Files/Common Files/VST3/Serum_x64.dll",
+    fxp_plugin_path="C:/Program Files/Common Files/VST3/Serum_x64.dll",
     sample_rate=44100,
     note=48,
     duration=1.0,
@@ -92,27 +130,37 @@ with ParallelBatchRenderer(config, workers=-1) as r:
 audio = render_preset("C:/Presets/lead.fxp", config)
 ```
 
+`BatchRenderer`, `ParallelBatchRenderer`, and `render_preset` are `.fxp`-only at the public library API in 0.2.0 — they require `fxp_plugin_path` to be set and raise `NotImplementedError` if only `serum2_plugin_path` is provided. Serum 2 rendering is fully wired through the CLI; library access lands in a follow-up release. If you need it now, use `vst_render.batch.run_batch_to_disk` directly with `preset_format="serum2"` jobs (see `tests/test_serum2_smoke.py` for a working example).
+
 ## Development
 
 Windows:
 ```bash
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -e ".[dev]"
-.venv/Scripts/python.exe -m pytest tests/ --ignore=tests/test_parallel_smoke.py  # unit tests
-.venv/Scripts/python.exe -m pytest tests/test_parallel_smoke.py \
-    --plugin-path "C:/Program Files/Common Files/VST3/Serum_x64.dll" \
-    --preset-dir "C:/Serum Presets/Leads/"                                         # integration
+.venv/Scripts/python.exe -m pytest tests/ \
+    --ignore=tests/test_parallel_smoke.py --ignore=tests/test_serum2_smoke.py     # unit tests
+.venv/Scripts/python.exe -m pytest tests/test_parallel_smoke.py tests/test_serum2_smoke.py \
+    --fxp-plugin-path "C:/Program Files/Common Files/VST3/Serum_x64.dll" \
+    --serum2-plugin-path "C:/Program Files/Common Files/VST3/Serum2.vst3" \
+    --preset-dir "C:/Serum Presets/Leads/" \
+    --serum-preset-dir "C:/Serum 2 Presets/Pads/"                                  # integration
 ```
 
 macOS:
 ```bash
 python -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
-.venv/bin/python -m pytest tests/ --ignore=tests/test_parallel_smoke.py
-.venv/bin/python -m pytest tests/test_parallel_smoke.py \
-    --plugin-path "/Library/Audio/Plug-Ins/VST/Serum.vst" \
-    --preset-dir "$HOME/Documents/Serum Presets/Leads/"
+.venv/bin/python -m pytest tests/ \
+    --ignore=tests/test_parallel_smoke.py --ignore=tests/test_serum2_smoke.py
+.venv/bin/python -m pytest tests/test_parallel_smoke.py tests/test_serum2_smoke.py \
+    --fxp-plugin-path "/Library/Audio/Plug-Ins/VST/Serum.vst" \
+    --serum2-plugin-path "/Library/Audio/Plug-Ins/VST3/Serum2.vst3" \
+    --preset-dir "$HOME/Documents/Serum Presets/Leads/" \
+    --serum-preset-dir "$HOME/Documents/Serum 2 Presets/Pads/"
 ```
+
+Each fixture is gated independently: a user with only one plugin still runs the smoke half they have plumbing for. Env vars `VST_FXP_PLUGIN_PATH`, `VST_SERUM2_PLUGIN_PATH`, `VST_PRESET_DIR`, `VST_SERUM_PRESET_DIR` are accepted as alternatives to the flags.
 
 `scripts/verify_dawdreamer.py` sanity-checks three architectural assumptions (preset hot-swap, bad-path recovery, loky crash recovery) against a real plugin. Re-run it after upgrading DawDreamer or adding plugin support.
 
