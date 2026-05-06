@@ -21,10 +21,16 @@ _cli_app.pretty_exceptions_enable = False
 
 def pytest_addoption(parser):
     parser.addoption(
-        "--plugin-path",
+        "--fxp-plugin-path",
         action="store",
         default=None,
-        help="Path to Serum VST2 .dll for integration tests.",
+        help="Path to a Serum 1 VST2/VST3 (loads .fxp presets) for integration tests.",
+    )
+    parser.addoption(
+        "--serum2-plugin-path",
+        action="store",
+        default=None,
+        help="Path to the Serum 2 VST3 (loads .SerumPreset state blobs) for integration tests.",
     )
     parser.addoption(
         "--preset-dir",
@@ -32,13 +38,43 @@ def pytest_addoption(parser):
         default=None,
         help="Directory containing .fxp presets for integration tests.",
     )
+    parser.addoption(
+        "--serum-preset-dir",
+        action="store",
+        default=None,
+        help="Directory containing .SerumPreset files for the serum2 smoke test.",
+    )
 
 
 @pytest.fixture
-def plugin_path(request) -> str:
-    path = request.config.getoption("--plugin-path") or os.environ.get("VST_PLUGIN_PATH")
+def fxp_plugin_path(request) -> str:
+    """Resolved path to a Serum 1 plugin that can load .fxp presets.
+
+    Skips if neither --fxp-plugin-path nor VST_FXP_PLUGIN_PATH is set."""
+    path = request.config.getoption("--fxp-plugin-path") or os.environ.get(
+        "VST_FXP_PLUGIN_PATH"
+    )
     if not path:
-        pytest.skip("No plugin path provided. Set --plugin-path or VST_PLUGIN_PATH.")
+        pytest.skip(
+            "No fxp plugin path provided. Set --fxp-plugin-path or "
+            "VST_FXP_PLUGIN_PATH."
+        )
+    return str(Path(path).resolve())
+
+
+@pytest.fixture
+def serum2_plugin_path(request) -> str:
+    """Resolved path to the Serum 2 VST3 plugin (loads .SerumPreset via load_state).
+
+    Skips if neither --serum2-plugin-path nor VST_SERUM2_PLUGIN_PATH is set."""
+    path = request.config.getoption("--serum2-plugin-path") or os.environ.get(
+        "VST_SERUM2_PLUGIN_PATH"
+    )
+    if not path:
+        pytest.skip(
+            "No serum2 plugin path provided. Set --serum2-plugin-path or "
+            "VST_SERUM2_PLUGIN_PATH."
+        )
     return str(Path(path).resolve())
 
 
@@ -51,4 +87,27 @@ def preset_files(request) -> list[str]:
     files = sorted(Path(preset_dir).rglob("*.fxp"))[:2]
     if len(files) < 2:
         pytest.skip(f"Need >=2 .fxp files in preset dir, found {len(files)}.")
+    return [str(f.resolve()) for f in files]
+
+
+@pytest.fixture
+def serum_preset_files(request) -> list[str]:
+    """Two real `.SerumPreset` files for the serum2 smoke test; skips if unavailable.
+
+    Mirrors `preset_files` but for the Serum 2 format. The fixture is gated
+    independently so a user with only one of the two plugins can still run
+    the matching smoke half."""
+    preset_dir = request.config.getoption("--serum-preset-dir") or os.environ.get(
+        "VST_SERUM_PRESET_DIR"
+    )
+    if not preset_dir:
+        pytest.skip(
+            "No serum preset dir provided. Set --serum-preset-dir or "
+            "VST_SERUM_PRESET_DIR."
+        )
+    files = sorted(Path(preset_dir).rglob("*.SerumPreset"))[:2]
+    if len(files) < 2:
+        pytest.skip(
+            f"Need >=2 .SerumPreset files in {preset_dir}, found {len(files)}."
+        )
     return [str(f.resolve()) for f in files]

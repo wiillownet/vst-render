@@ -11,9 +11,9 @@ from vst_render import ParallelBatchRenderer, RenderConfig
 
 
 @pytest.mark.slow
-def test_parallel_render_produces_audio(plugin_path, preset_files):
+def test_parallel_render_produces_audio(fxp_plugin_path, preset_files):
     config = RenderConfig(
-        fxp_plugin_path=plugin_path,
+        fxp_plugin_path=fxp_plugin_path,
         sample_rate=44100,
         note=48,
         velocity=127,
@@ -44,7 +44,7 @@ def _write_midi_sequence(path: Path, beats: int) -> None:
 
 
 @pytest.mark.slow
-def test_parallel_render_with_midi_file(plugin_path, preset_files, tmp_path):
+def test_parallel_render_with_midi_file(fxp_plugin_path, preset_files, tmp_path):
     """`--midi` path: worker must load the MIDI file and render for
     (midi_duration + tail) seconds instead of (duration + tail)."""
     midi_path = tmp_path / "seq.mid"
@@ -54,7 +54,7 @@ def test_parallel_render_with_midi_file(plugin_path, preset_files, tmp_path):
     sample_rate = 44100
 
     config = RenderConfig(
-        fxp_plugin_path=plugin_path,
+        fxp_plugin_path=fxp_plugin_path,
         sample_rate=sample_rate,
         midi_path=midi_path,
         tail=tail,
