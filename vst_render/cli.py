@@ -175,12 +175,11 @@ def render(
 
     extension = ".npy" if fmt == "npy" else ".wav"
     jobs: list[dict] = []
-    # The preset format is unpacked here but not threaded through the
-    # job dict yet — that lands in Step C of the Serum 2 expansion.
-    for p, _preset_format in preset_files:
+    for p, preset_fmt in preset_files:
         stem = compose_filename(filename_template, p, presets_root, note, velocity)
         jobs.append({
             "preset_path": str(p.resolve()),
+            "preset_format": preset_fmt.value,
             "filename_stem": stem,
             "note": note,
             "velocity": velocity,

@@ -15,6 +15,7 @@ import numpy as np
 
 from .batch import iter_batch_to_memory
 from .config import RenderConfig
+from .presets import PresetFormat
 from .renderer import make_engine, render_one
 from .utils import get_midi_duration
 
@@ -149,6 +150,11 @@ class ParallelBatchRenderer:
         return [
             {
                 "preset_path": str(Path(p).resolve()),
+                # ParallelBatchRenderer is gated to fxp_plugin_path until
+                # Step D adds dual-synth init; every job built here is
+                # therefore an .fxp by construction. When Serum 2 lands in
+                # the library API the caller will supply the tag.
+                "preset_format": PresetFormat.FXP.value,
                 "note": cfg.note,
                 "velocity": cfg.velocity,
                 "duration": cfg.duration,

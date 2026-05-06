@@ -238,6 +238,7 @@ Every job passed to `render_task` must have these keys. `batch.py` is responsibl
 | Key | Type | Populated by | Notes |
 |---|---|---|---|
 | `preset_path` | `str` | `batch.py` | Absolute path string |
+| `preset_format` | `str` | `batch.py` via `presets.PresetFormat` | `"fxp"` or `"serum2"`. Drives worker dispatch: `fxp` → `synth_fxp.load_preset(...)`, `serum2` → `synth_serum2.load_state(...)` after `serum2_preset_loader.convert_preset_file(...)`. |
 | `filename_stem` | `str` | `batch.py` via `compose_filename()` | Intermediate stem before collision resolution; consumed and replaced by `assign_output_paths()` which writes `output_path` |
 | `output_path` | `str` | `batch.py` via `assign_output_paths()` | Absolute path string; replaces `filename_stem` after collision resolution |
 | `note` | `int` | `batch.py` from CLI args | Ignored if `midi_path` is set |
