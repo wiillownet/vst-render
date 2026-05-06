@@ -15,7 +15,7 @@ import numpy as np
 
 from .batch import iter_batch_to_memory
 from .config import RenderConfig
-from .presets import PresetFormat
+from .presets import PresetFormat, format_for_path
 from .renderer import make_engine, render_one
 from .utils import get_midi_duration
 
@@ -24,8 +24,8 @@ def _validate_paths(config: RenderConfig) -> float | None:
     """Plugin/MIDI existence check at renderer entry. Returns MIDI duration or None.
 
     Validates whichever plugin paths are set on the config. The dual-synth
-    worker tolerates either path being None; the gate that matters at
-    this layer is "if you set it, it must exist."
+    engine tolerates either path being None; the gate that matters at this
+    layer is "if you set it, it must exist."
     """
     if config.fxp_plugin_path is not None and not Path(config.fxp_plugin_path).exists():
         raise FileNotFoundError(f"Plugin not found: {config.fxp_plugin_path}")
@@ -39,33 +39,45 @@ def _validate_paths(config: RenderConfig) -> float | None:
     return None
 
 
-def _require_fxp_plugin(config: RenderConfig) -> Path:
-    """`BatchRenderer`, `render_preset`, and `ParallelBatchRenderer._build_jobs`
-    are all .fxp-only at the library API layer — they don't yet have a
-    way for the caller to mark a preset as serum2-formatted. The CLI is
-    where Serum 2 lives until that extension lands. Reject configs that
-    only set the serum2 path with a clear error rather than a None deref
-    deeper in."""
-    if config.fxp_plugin_path is None:
-        raise NotImplementedError(
-            "BatchRenderer / ParallelBatchRenderer currently require "
-            "fxp_plugin_path. Serum 2 (.SerumPreset) rendering through "
-            "these classes lands in a follow-up; use the CLI in the meantime."
+def _check_required_plugins(
+    config: RenderConfig, formats: set[PresetFormat]
+) -> None:
+    """Reject configs that omit a plugin path for a format the caller is
+    actually trying to render. Mirrors the CLI's start-up check so library
+    users get the same clear error before any worker boots."""
+    flag_for: dict[PresetFormat, str] = {
+        PresetFormat.FXP: "fxp_plugin_path",
+        PresetFormat.SERUM2: "serum2_plugin_path",
+    }
+    ext_for: dict[PresetFormat, str] = {
+        PresetFormat.FXP: ".fxp",
+        PresetFormat.SERUM2: ".SerumPreset",
+    }
+    have = set()
+    if config.fxp_plugin_path is not None:
+        have.add(PresetFormat.FXP)
+    if config.serum2_plugin_path is not None:
+        have.add(PresetFormat.SERUM2)
+    missing = formats - have
+    if missing:
+        msgs = sorted(
+            f"{ext_for[m]} preset(s) supplied but RenderConfig.{flag_for[m]} is unset"
+            for m in missing
         )
-    return Path(config.fxp_plugin_path)
+        raise ValueError("; ".join(msgs))
 
 
 class BatchRenderer:
     """
-    Single-process, sequential renderer. Loads the plugin once in
-    `__enter__` and reuses it for every `render()` call.
+    Single-process, sequential renderer. Loads one or both plugins once in
+    `__enter__` and reuses them for every `render()` call. The format of
+    each preset is auto-detected from its file suffix.
     """
 
     def __init__(self, config: RenderConfig):
         self.config = config
         self._frozen_config: RenderConfig | None = None
         self._engine = None
-        self._synth = None
         self._midi_duration: float | None = None
 
     def __enter__(self) -> "BatchRenderer":
@@ -74,19 +86,19 @@ class BatchRenderer:
         # `midi_path`. Cheap insurance against a silent failure mode.
         self._frozen_config = dataclasses.replace(self.config)
         self._midi_duration = _validate_paths(self._frozen_config)
-        fxp_plugin_path = _require_fxp_plugin(self._frozen_config)
-        self._engine, self._synth = make_engine(
-            fxp_plugin_path, self._frozen_config.sample_rate
+        self._engine = make_engine(
+            self._frozen_config.fxp_plugin_path,
+            self._frozen_config.serum2_plugin_path,
+            self._frozen_config.sample_rate,
         )
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         # DawDreamer has no explicit teardown — drop refs for GC.
         self._engine = None
-        self._synth = None
         self._frozen_config = None
 
-    def render(self, fxp_path: str | Path) -> np.ndarray:
+    def render(self, preset_path: str | Path) -> np.ndarray:
         # CLAUDE.md forbids threading with DawDreamer — it hangs after the
         # first cross-thread call. Surface the foot-gun loudly here rather
         # than letting an embedder lose hours to a silent hang.
@@ -99,10 +111,15 @@ class BatchRenderer:
         if self._engine is None:
             raise RuntimeError("BatchRenderer must be used as a context manager")
         cfg = self._frozen_config
+        # render_one auto-detects format and refuses if the matching synth
+        # isn't loaded — but we can give a better error before that fires by
+        # checking the config now (the engine has already been built in
+        # __enter__, so the per-format synth presence mirrors the config).
+        fmt = format_for_path(Path(preset_path))
+        _check_required_plugins(cfg, {fmt})
         return render_one(
             self._engine,
-            self._synth,
-            fxp_path,
+            preset_path,
             note=cfg.note,
             velocity=cfg.velocity,
             duration=cfg.duration,
@@ -119,6 +136,10 @@ class ParallelBatchRenderer:
     workers to the main process — callers holding the entire result dict
     in memory will scale to tens or low hundreds of MBs before it hurts.
     For larger libraries, iterate and spill to disk.
+
+    Mixed-format batches are supported: pass `.fxp` and `.SerumPreset`
+    paths in the same call as long as `RenderConfig` provides the
+    matching plugin paths. Format is auto-detected per preset.
     """
 
     def __init__(self, config: RenderConfig, workers: int = -1):
@@ -150,11 +171,7 @@ class ParallelBatchRenderer:
         return [
             {
                 "preset_path": str(Path(p).resolve()),
-                # ParallelBatchRenderer is gated to fxp_plugin_path until
-                # Step D adds dual-synth init; every job built here is
-                # therefore an .fxp by construction. When Serum 2 lands in
-                # the library API the caller will supply the tag.
-                "preset_format": PresetFormat.FXP.value,
+                "preset_format": format_for_path(Path(p)).value,
                 "note": cfg.note,
                 "velocity": cfg.velocity,
                 "duration": cfg.duration,
@@ -167,22 +184,31 @@ class ParallelBatchRenderer:
         ]
 
     def iter_batch(self, preset_paths: list[str | Path]) -> Iterator[tuple[str, np.ndarray]]:
-        """Yield `(fxp_path, audio)` as each job completes (unordered)."""
+        """Yield `(preset_path, audio)` as each job completes (unordered)."""
         jobs = self._build_jobs(preset_paths)
         cfg = self._frozen_config
-        fxp_plugin_path = _require_fxp_plugin(cfg)
-        # Pass both paths through; the worker pool boots a serum2 synth
-        # too if the config provided one. Idle synth in graph is silent
-        # (probe 1, byte-identical), so paying for the extra synth load
+        # Validate now, before booting workers: every format actually
+        # appearing in this batch must have its plugin path set.
+        formats_in_batch = {
+            PresetFormat(j["preset_format"]) for j in jobs
+        }
+        _check_required_plugins(cfg, formats_in_batch)
+
+        # Pass both plugin paths to the worker pool; the worker conditionally
+        # boots whichever synth is non-None. Idle synth in graph is silent
+        # (probe 1, byte-identical), so the cost of booting an unused synth
         # is the user's choice via RenderConfig.
-        serum2_plugin_path = (
+        fxp_str = (
+            str(cfg.fxp_plugin_path) if cfg.fxp_plugin_path is not None else None
+        )
+        serum2_str = (
             str(cfg.serum2_plugin_path) if cfg.serum2_plugin_path is not None else None
         )
         for result in iter_batch_to_memory(
             jobs,
             self.workers,
-            str(fxp_plugin_path),
-            serum2_plugin_path,
+            fxp_str,
+            serum2_str,
             cfg.sample_rate,
         ):
             if result["status"] == "ok":
@@ -195,22 +221,28 @@ class ParallelBatchRenderer:
         return dict(self.iter_batch(preset_paths))
 
 
-def render_preset(fxp_path: str | Path, config: RenderConfig) -> np.ndarray:
+def render_preset(preset_path: str | Path, config: RenderConfig) -> np.ndarray:
     """
     One-off render. Spins up a fresh engine, renders, returns audio.
-    Not suitable for batch use — each call pays the ~1-2s plugin cold-start.
+    Not suitable for batch use — each call pays the ~1-2s plugin cold-start
+    plus a 0.1s warmup render per loaded synth.
+
+    Format is auto-detected from the preset's file suffix; the matching
+    plugin path must be set on `config`.
     """
-    _validate_paths_result = _validate_paths(config)
-    fxp_plugin_path = _require_fxp_plugin(config)
-    engine, synth = make_engine(fxp_plugin_path, config.sample_rate)
+    midi_duration = _validate_paths(config)
+    fmt = format_for_path(Path(preset_path))
+    _check_required_plugins(config, {fmt})
+    engine = make_engine(
+        config.fxp_plugin_path, config.serum2_plugin_path, config.sample_rate
+    )
     return render_one(
         engine,
-        synth,
-        fxp_path,
+        preset_path,
         note=config.note,
         velocity=config.velocity,
         duration=config.duration,
         tail=config.tail,
         midi_path=config.midi_path,
-        midi_duration=_validate_paths_result,
+        midi_duration=midi_duration,
     )

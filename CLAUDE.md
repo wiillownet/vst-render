@@ -752,6 +752,25 @@ def test_mixed_format_smoke(fxp_plugin_path, serum2_plugin_path,
 
 ---
 
+## Public library API: format auto-detection
+
+`BatchRenderer`, `ParallelBatchRenderer`, and `render_preset` accept both `.fxp` and `.SerumPreset` paths. Format dispatch is auto-detected from the path suffix via `presets.format_for_path`; the caller does **not** mark each path with its format.
+
+The validation surface mirrors the CLI:
+1. `RenderConfig.__post_init__` rejects a config with neither plugin path set.
+2. `_validate_paths` (called from `__enter__` / `render_preset`) checks that any plugin path the caller did set actually exists on disk.
+3. `_check_required_plugins` (called per-render or per-batch) checks that every format in the actual preset list has its matching plugin path on the config — e.g. a batch containing `.SerumPreset` paths with `serum2_plugin_path=None` fails fast with a clear error before any worker boots.
+
+The error messages name the missing field (`serum2_plugin_path`, `fxp_plugin_path`) rather than the CLI flag, since at this layer the user is calling Python:
+
+```python
+ValueError: .SerumPreset preset(s) supplied but RenderConfig.serum2_plugin_path is unset
+```
+
+`renderer.py` mirrors `worker.py`'s dual-synth init — `make_engine(fxp_plugin_path, serum2_plugin_path, sample_rate)` returns an `Engine` dataclass with both synth slots and the per-engine `serum_state_path` tempfile. The same warmup-render loop runs at engine build to absorb Serum 2's first-render anomaly. Don't drop it.
+
+---
+
 ## Public API exports (`__init__.py`)
 
 ```python

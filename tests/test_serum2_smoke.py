@@ -1,10 +1,10 @@
 """Serum 2 + mixed-format smoke tests.
 
-`ParallelBatchRenderer` is still fxp-only at the public library API
-(`_require_fxp_plugin` gate in api.py), so these tests drive the worker
-pool the same way the CLI does — through `run_batch_to_disk` directly.
-That's also the only path that can pass both a `--fxp` and a `--serum2`
-plugin into one batch today.
+Two entry-points exercised:
+ - `run_batch_to_disk` (the path the CLI uses) — required when verifying
+   disk-output behavior or when sending a job dict directly.
+ - `ParallelBatchRenderer.render_batch` — the public library API, which
+   gained Serum 2 support after the `_require_fxp_plugin` gate was lifted.
 
 Each test is gated on an independent fixture, so a user with only one
 plugin still runs the smoke half they have plumbing for.
@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from vst_render import ParallelBatchRenderer, RenderConfig
 from vst_render.batch import run_batch_to_disk
 
 
@@ -133,3 +134,58 @@ def test_mixed_format_smoke(
 
     _check_audio(tmp_path / "fxp_out.wav")
     _check_audio(tmp_path / "serum2_out.wav")
+
+
+@pytest.mark.slow
+def test_parallel_batch_renderer_serum2_smoke(
+    serum2_plugin_path, serum_preset_files
+):
+    """The public `ParallelBatchRenderer` API must accept a serum2-only
+    config and a list of `.SerumPreset` paths, returning non-silent stereo
+    audio. This is the gate-lift acceptance test — pre-0.2.x this raised
+    `NotImplementedError` because the library API was hardcoded to fxp."""
+    config = RenderConfig(
+        serum2_plugin_path=serum2_plugin_path,
+        sample_rate=44100,
+        note=48,
+        velocity=127,
+        duration=1.0,
+        tail=1.0,
+    )
+    with ParallelBatchRenderer(config, workers=2) as renderer:
+        results = renderer.render_batch(serum_preset_files)
+
+    assert len(results) == len(serum_preset_files)
+    for preset_path, audio in results.items():
+        assert audio.shape[0] == 2, f"{preset_path}: expected stereo"
+        assert audio.dtype == np.float32
+        assert np.max(np.abs(audio)) > 3.16e-5, f"{preset_path}: silent output"
+
+
+@pytest.mark.slow
+def test_parallel_batch_renderer_mixed_format(
+    fxp_plugin_path,
+    serum2_plugin_path,
+    preset_files,
+    serum_preset_files,
+):
+    """Mixed batch through the public library API: one .fxp + one
+    .SerumPreset returned as a path -> audio dict, with both formats
+    auto-detected from the suffix."""
+    fxp_src = preset_files[0]
+    serum_src = serum_preset_files[0]
+    config = RenderConfig(
+        fxp_plugin_path=fxp_plugin_path,
+        serum2_plugin_path=serum2_plugin_path,
+        sample_rate=44100,
+        note=48,
+        duration=1.0,
+        tail=1.0,
+    )
+    with ParallelBatchRenderer(config, workers=2) as renderer:
+        results = renderer.render_batch([fxp_src, serum_src])
+
+    assert set(results.keys()) == {fxp_src, serum_src}
+    for path, audio in results.items():
+        assert audio.shape[0] == 2 and audio.dtype == np.float32
+        assert np.max(np.abs(audio)) > 3.16e-5, f"{path}: silent"

@@ -107,30 +107,38 @@ There is no compatibility shim — call sites need a one-time edit. Sorry.
 
 ## Library API
 
+`RenderConfig` accepts both plugin paths; the renderer auto-detects each preset's format from its file suffix and dispatches to the matching synth.
+
 ```python
 from vst_render import RenderConfig, BatchRenderer, ParallelBatchRenderer, render_preset
 
 config = RenderConfig(
     fxp_plugin_path="C:/Program Files/Common Files/VST3/Serum_x64.dll",
+    serum2_plugin_path="C:/Program Files/Common Files/VST3/Serum2.vst3",
     sample_rate=44100,
     note=48,
     duration=1.0,
     tail=1.0,
 )
 
-# Sequential, reuses one plugin instance across renders
+# Sequential, reuses one engine across renders
 with BatchRenderer(config) as r:
-    audio = r.render("C:/Presets/lead.fxp")   # (2, N) float32
+    audio = r.render("C:/Presets/lead.fxp")          # auto-detected as fxp
+    audio = r.render("C:/Presets/pad.SerumPreset")   # auto-detected as serum2
 
-# Parallel — returns a dict of path -> audio
+# Parallel mixed batch — returns a dict of path -> audio
 with ParallelBatchRenderer(config, workers=-1) as r:
-    results = r.render_batch(["a.fxp", "b.fxp", "c.fxp"])
+    results = r.render_batch([
+        "a.fxp",
+        "b.fxp",
+        "c.SerumPreset",
+    ])
 
 # One-off
 audio = render_preset("C:/Presets/lead.fxp", config)
 ```
 
-`BatchRenderer`, `ParallelBatchRenderer`, and `render_preset` are `.fxp`-only at the public library API in 0.2.0 — they require `fxp_plugin_path` to be set and raise `NotImplementedError` if only `serum2_plugin_path` is provided. Serum 2 rendering is fully wired through the CLI; library access lands in a follow-up release. If you need it now, use `vst_render.batch.run_batch_to_disk` directly with `preset_format="serum2"` jobs (see `tests/test_serum2_smoke.py` for a working example).
+You only need to set the plugin paths for the formats you actually render — a `.fxp`-only batch needs only `fxp_plugin_path`; a `.SerumPreset`-only batch needs only `serum2_plugin_path`. If a preset's format is encountered without its matching plugin path, the renderer raises `ValueError` with a message naming the missing field, before any worker boots.
 
 ## Development
 
