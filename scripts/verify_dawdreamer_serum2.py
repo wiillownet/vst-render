@@ -25,9 +25,10 @@ architecture in /Users/willow/.claude/plans/enumerated-swinging-book.md):
 Usage:
     python scripts/verify_dawdreamer_serum2.py \\
         --vst2 "/Library/Audio/Plug-Ins/VST/Serum.vst" \\
-        --vst3 "/Library/Audio/Plug-Ins/VST3/Serum2.vst3" \\
+        --vst3-serum2 "/Library/Audio/Plug-Ins/VST3/Serum2.vst3" \\
         --serum-preset <path-to-a-.SerumPreset> \\
         --serum-preset-2 <path-to-a-different-.SerumPreset> \\
+        [--vst3-serum1 <path-to-Serum-1-VST3>] \\
         [--fxp <path-to-an-fxp-preset>]
 
 The --fxp arg is optional. When omitted, the VST2 stays at its init
@@ -216,7 +217,7 @@ def test_load_state_in_place(vst3_path: str, serum_path_1: str,
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     p.add_argument("--vst2", required=True, help="Path to VST2 Serum 1 (.dll on Windows, .vst on macOS)")
-    p.add_argument("--vst3", required=True, help="Path to VST3 Serum 2 (.vst3 file or bundle)")
+    p.add_argument("--vst3-serum2", required=True, help="Path to VST3 Serum 2 (.vst3 file or bundle)")
     p.add_argument("--vst3-serum1", default=None, help="Optional. Path to VST3 Serum 1 (NOT Serum 2). If provided, Test 3 probes whether load_preset(.fxp) works on it.")
     p.add_argument("--fxp", default=None, help="Optional .fxp preset to load on the VST2 in the mixed-graph test. If omitted, the VST2 stays at its init patch.")
     p.add_argument("--serum-preset", required=True, help="Path to a .SerumPreset file (must be audible)")
@@ -225,8 +226,8 @@ def main() -> int:
     args = p.parse_args()
 
     required = {
-        "VST2": args.vst2,
-        "VST3": args.vst3,
+        "VST2 Serum 1":  args.vst2,
+        "VST3 Serum 2":  args.vst3_serum2,
         "SerumPreset 1": args.serum_preset,
         "SerumPreset 2": args.serum_preset_2,
     }
@@ -244,7 +245,7 @@ def main() -> int:
         print("  FXP: <not provided; VST2 stays at init patch>")
 
     vst2 = str(Path(args.vst2).resolve())
-    vst3 = str(Path(args.vst3).resolve())
+    vst3 = str(Path(args.vst3_serum2).resolve())
     fxp = str(Path(args.fxp).resolve()) if args.fxp is not None else None
     sp1 = str(Path(args.serum_preset).resolve())
     sp2 = str(Path(args.serum_preset_2).resolve())
