@@ -89,9 +89,17 @@ def render(
         typer.echo(f"Output path exists and is not a directory: {output}", err=True)
         raise typer.Exit(code=2)
 
-    preset_files = discover_presets(presets, recurse=not no_recurse)
+    try:
+        preset_files = discover_presets(presets, recurse=not no_recurse)
+    except ValueError as exc:
+        # Single-file mode with an unsupported extension.
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=2) from None
     if not preset_files:
-        typer.echo(f"No .fxp files found under {presets}", err=True)
+        typer.echo(
+            f"No supported preset files (.fxp, .SerumPreset) found under {presets}",
+            err=True,
+        )
         raise typer.Exit(code=0)
 
     # Single-file mode: presets_root=None so {subpath} collapses out.
@@ -116,7 +124,9 @@ def render(
 
     extension = ".npy" if fmt == "npy" else ".wav"
     jobs: list[dict] = []
-    for p in preset_files:
+    # The preset format is unpacked here but not threaded through the
+    # job dict yet — that lands in Step C of the Serum 2 expansion.
+    for p, _preset_format in preset_files:
         stem = compose_filename(filename_template, p, presets_root, note, velocity)
         jobs.append({
             "preset_path": str(p.resolve()),

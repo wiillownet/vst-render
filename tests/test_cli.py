@@ -131,7 +131,7 @@ def test_output_is_existing_file(fake_env, tmp_path):
     assert "not a directory" in result.output
 
 
-def test_no_fxp_files_found_in_presets_dir(tmp_path):
+def test_no_preset_files_found_in_presets_dir(tmp_path):
     plugin = tmp_path / "plugin.dll"
     _touch(plugin)
     empty_presets = tmp_path / "empty_presets"
@@ -139,7 +139,7 @@ def test_no_fxp_files_found_in_presets_dir(tmp_path):
     result = runner.invoke(app, [str(plugin), str(empty_presets), str(tmp_path / "out")])
     # Design says: warning + exit 0 when nothing matches.
     assert result.exit_code == 0
-    assert "No .fxp files found" in result.output
+    assert "No supported preset files" in result.output
 
 
 # ---- MIDI error handling --------------------------------------------------
