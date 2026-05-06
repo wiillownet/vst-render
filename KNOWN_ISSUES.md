@@ -80,6 +80,18 @@ Tracked user-visible limitations and upstream quirks. Not every limitation is a 
 
 ---
 
+## JUCE `attempt to map invalid URI` stderr noise on plugin load (macOS)
+
+**Symptom:** every render emits one or more lines like `error: attempt to map invalid URI '/Library/Audio/Plug-Ins/VST3/Serum2.vst3'` on stderr at worker startup. The render itself completes successfully and the output audio is correct.
+
+**Cause:** the message comes from JUCE's plugin loader (via DawDreamer), not vst-render. JUCE walks the plugin bundle to map embedded resources and logs a non-fatal warning when a path doesn't resolve as a `file://` URI. The check is advisory; the plugin still loads and renders.
+
+**Workaround:** filter the line out at the shell if it interferes with downstream tooling: `vst-render ... 2> >(grep -v "attempt to map invalid URI" >&2)`. vst-render does not capture or suppress JUCE's stderr — doing so would risk hiding genuine plugin errors that share the same stream.
+
+**Upstream:** would require a JUCE-level fix; not tracked.
+
+---
+
 ## A worker crash mid-batch aborts the remaining jobs on that executor
 
 **Symptom:** after a `TerminatedWorkerError` from one render, all subsequent futures submitted to the same executor also raise, and the remaining jobs in the batch are marked as errors.
