@@ -202,16 +202,16 @@ def render(
 
     output.mkdir(parents=True, exist_ok=True)
     n_workers = resolve_worker_count(workers)
-    # Step B: the worker pool is still single-synth — Step D adds the
-    # dual-synth init that consumes both paths. Hand off whichever path
-    # was provided; preference for --fxp matches the validation order.
-    plugin_str = str((fxp if fxp is not None else serum2).resolve())
+    fxp_str = str(fxp.resolve()) if fxp is not None else None
+    serum2_str = str(serum2.resolve()) if serum2 is not None else None
 
     # In verbose mode, per-preset DEBUG logs replace the progress bar so
     # the two don't fight for the terminal.
     if verbose:
         typer.echo(f"Rendering {len(jobs)} preset(s) with {n_workers} workers…")
-        results = run_batch_to_disk(jobs, n_workers, plugin_str, sample_rate)
+        results = run_batch_to_disk(
+            jobs, n_workers, fxp_str, serum2_str, sample_rate
+        )
     else:
         with Progress(
             TextColumn("[progress.description]{task.description}"),
@@ -228,7 +228,8 @@ def render(
             results = run_batch_to_disk(
                 jobs,
                 n_workers,
-                plugin_str,
+                fxp_str,
+                serum2_str,
                 sample_rate,
                 on_result=lambda _r: progress.advance(task_id),
             )

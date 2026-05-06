@@ -24,16 +24,22 @@ def resolve_worker_count(workers: int) -> int:
     return max(1, workers)
 
 
-def _get_executor(workers: int, plugin_path: str, sample_rate: int):
+def _get_executor(
+    workers: int,
+    fxp_plugin_path: str | None,
+    serum2_plugin_path: str | None,
+    sample_rate: int,
+):
     """
     Build the reusable executor with our init_worker. 30-minute idle
     timeout matches CLAUDE.md — lower values cause cold-start surprises
-    for long-running embedders.
+    for long-running embedders. Either plugin path may be None; init_worker
+    requires at least one to be set.
     """
     return get_reusable_executor(
         max_workers=resolve_worker_count(workers),
         initializer=init_worker,
-        initargs=(plugin_path, sample_rate),
+        initargs=(fxp_plugin_path, serum2_plugin_path, sample_rate),
         timeout=1800,
     )
 
@@ -41,7 +47,8 @@ def _get_executor(workers: int, plugin_path: str, sample_rate: int):
 def run_batch_to_disk(
     jobs: list[dict],
     workers: int,
-    plugin_path: str,
+    fxp_plugin_path: str | None,
+    serum2_plugin_path: str | None,
     sample_rate: int,
     on_result: Callable[[dict], None] | None = None,
 ) -> list[dict]:
@@ -58,7 +65,7 @@ def run_batch_to_disk(
     rerun; `--skip-existing` makes re-runs idempotent for the jobs that
     already landed on disk.
     """
-    executor = _get_executor(workers, plugin_path, sample_rate)
+    executor = _get_executor(workers, fxp_plugin_path, serum2_plugin_path, sample_rate)
     futures = {executor.submit(render_to_disk, job): idx for idx, job in enumerate(jobs)}
     results: list[dict | None] = [None] * len(jobs)
     for future in as_completed(futures):
@@ -80,14 +87,18 @@ def run_batch_to_disk(
 
 
 def iter_batch_to_memory(
-    jobs: list[dict], workers: int, plugin_path: str, sample_rate: int
+    jobs: list[dict],
+    workers: int,
+    fxp_plugin_path: str | None,
+    serum2_plugin_path: str | None,
+    sample_rate: int,
 ) -> Iterator[dict]:
     """
     Library entry: yield `{"status", "path", "audio" | "error"}` dicts as
     each job completes (unordered — driven by whichever worker finishes
     first). Callers building an ordered result dict collect all yields.
     """
-    executor = _get_executor(workers, plugin_path, sample_rate)
+    executor = _get_executor(workers, fxp_plugin_path, serum2_plugin_path, sample_rate)
     futures = {executor.submit(render_to_memory, job): job for job in jobs}
     for future in as_completed(futures):
         job = futures[future]

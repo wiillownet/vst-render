@@ -23,12 +23,9 @@ from .utils import get_midi_duration
 def _validate_paths(config: RenderConfig) -> float | None:
     """Plugin/MIDI existence check at renderer entry. Returns MIDI duration or None.
 
-    Validates whichever plugin paths are set on the config. The in-process
-    and parallel renderers below still only drive the .fxp synth; Step D
-    of the Serum 2 expansion threads `serum2_plugin_path` through the
-    worker pool. Until then, configs without `fxp_plugin_path` are
-    rejected at first use rather than producing a confusing
-    AttributeError downstream.
+    Validates whichever plugin paths are set on the config. The dual-synth
+    worker tolerates either path being None; the gate that matters at
+    this layer is "if you set it, it must exist."
     """
     if config.fxp_plugin_path is not None and not Path(config.fxp_plugin_path).exists():
         raise FileNotFoundError(f"Plugin not found: {config.fxp_plugin_path}")
@@ -43,9 +40,12 @@ def _validate_paths(config: RenderConfig) -> float | None:
 
 
 def _require_fxp_plugin(config: RenderConfig) -> Path:
-    """Until Step D wires up dual-synth workers, the in-process and parallel
-    renderers can only drive the .fxp synth. Reject configs that only set
-    the serum2 path with a clear error rather than a None deref deeper in."""
+    """`BatchRenderer`, `render_preset`, and `ParallelBatchRenderer._build_jobs`
+    are all .fxp-only at the library API layer — they don't yet have a
+    way for the caller to mark a preset as serum2-formatted. The CLI is
+    where Serum 2 lives until that extension lands. Reject configs that
+    only set the serum2 path with a clear error rather than a None deref
+    deeper in."""
     if config.fxp_plugin_path is None:
         raise NotImplementedError(
             "BatchRenderer / ParallelBatchRenderer currently require "
@@ -171,8 +171,19 @@ class ParallelBatchRenderer:
         jobs = self._build_jobs(preset_paths)
         cfg = self._frozen_config
         fxp_plugin_path = _require_fxp_plugin(cfg)
+        # Pass both paths through; the worker pool boots a serum2 synth
+        # too if the config provided one. Idle synth in graph is silent
+        # (probe 1, byte-identical), so paying for the extra synth load
+        # is the user's choice via RenderConfig.
+        serum2_plugin_path = (
+            str(cfg.serum2_plugin_path) if cfg.serum2_plugin_path is not None else None
+        )
         for result in iter_batch_to_memory(
-            jobs, self.workers, str(fxp_plugin_path), cfg.sample_rate
+            jobs,
+            self.workers,
+            str(fxp_plugin_path),
+            serum2_plugin_path,
+            cfg.sample_rate,
         ):
             if result["status"] == "ok":
                 yield result["path"], result["audio"]
