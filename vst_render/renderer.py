@@ -17,12 +17,10 @@ import dawdreamer as daw
 import numpy as np
 from serum2_preset_loader import convert_preset_file
 
+from .config import SILENCE_EPS
 from .presets import PresetFormat, format_for_path
 
 logger = logging.getLogger("vst_render")
-
-# -90 dBFS peak; below the 16-bit quantization floor. Matches CLAUDE.md.
-SILENCE_EPS = 3.16e-5
 
 
 @dataclass

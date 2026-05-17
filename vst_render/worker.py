@@ -24,7 +24,7 @@ _synth_serum2 = None
 # `synth.load_state` (takes a path). Reused for every serum2 job.
 _serum_state_path: Path | None = None
 
-SILENCE_EPS = 3.16e-5  # -90 dBFS, 16-bit quantization floor
+SILENCE_EPS = 3.16e-5  # -90 dBFS, 16-bit quantization floor. Canonical copy lives in vst_render/config.py; duplicated here to keep worker.py's module-level imports stdlib-only.
 
 
 def init_worker(
@@ -84,11 +84,13 @@ def init_worker(
 
     _engine.load_graph(processors)
 
-    # Per-worker tempfile dir. mkdtemp() is unique per call; loky workers
-    # exiting cleanly is best-effort, so we don't rely on cleanup. Each
-    # serum2 job overwrites state.bin via write_bytes.
-    tmpdir = tempfile.mkdtemp(prefix="vst_render_serum2_")
-    _serum_state_path = Path(tmpdir) / "state.bin"
+    # Per-worker tempfile dir. Only created when this worker will actually
+    # run serum2 jobs — mirrors renderer.py:84-88. mkdtemp() is unique per
+    # call; loky workers exiting cleanly is best-effort, so we don't rely
+    # on cleanup. Each serum2 job overwrites state.bin via write_bytes.
+    if serum2_plugin_path is not None:
+        tmpdir = tempfile.mkdtemp(prefix="vst_render_serum2_")
+        _serum_state_path = Path(tmpdir) / "state.bin"
 
     # Warmup renders. Short 0.1s renders are enough to pull Serum 2's
     # samples off disk; the engine renders both synths simultaneously,

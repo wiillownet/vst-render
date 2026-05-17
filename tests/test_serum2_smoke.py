@@ -19,9 +19,7 @@ import soundfile as sf
 
 from vst_render import ParallelBatchRenderer, RenderConfig
 from vst_render.batch import run_batch_to_disk
-
-
-SILENCE_EPS = 3.16e-5  # -90 dBFS — same threshold worker.py logs against
+from vst_render.config import SILENCE_EPS
 
 
 def _check_audio(wav_path: Path) -> None:

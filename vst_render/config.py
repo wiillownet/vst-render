@@ -5,6 +5,14 @@ from pathlib import Path
 from typing import Literal
 
 
+# Peak below this is treated as silent output by the renderer and worker.
+# -90 dBFS ≈ 16-bit quantization floor. KNOWN_ISSUES notes this is too
+# conservative for 24/32f bit depths — a future change would happen here.
+# worker.py keeps its own copy (stdlib-only module-level imports contract);
+# this is the canonical home for renderer.py and tests.
+SILENCE_EPS = 3.16e-5
+
+
 @dataclass
 class RenderConfig:
     # At least one of these must be set. `fxp_plugin_path` accepts either
