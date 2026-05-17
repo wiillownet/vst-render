@@ -14,3 +14,4 @@ scratch_output/
 .idea/
 .claude/settings.local.json
 .DS_Store
+CLAUDE.local.md
