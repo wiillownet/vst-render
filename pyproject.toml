@@ -29,7 +29,7 @@ allow-direct-references = true
 vst-render = "vst_render.cli:app"
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-mock"]
+dev = ["pytest"]
 
 [tool.pytest.ini_options]
 markers = ["slow: integration tests that require a plugin to be installed"]
