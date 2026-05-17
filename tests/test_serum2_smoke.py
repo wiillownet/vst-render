@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from vst_render import ParallelBatchRenderer, RenderConfig
+from vst_render import BatchRenderer, ParallelBatchRenderer, RenderConfig
 from vst_render.batch import run_batch_to_disk
 from vst_render.config import SILENCE_EPS
 
@@ -187,3 +187,34 @@ def test_parallel_batch_renderer_mixed_format(
     for path, audio in results.items():
         assert audio.shape[0] == 2 and audio.dtype == np.float32
         assert np.max(np.abs(audio)) > 3.16e-5, f"{path}: silent"
+
+
+@pytest.mark.slow
+def test_batch_renderer_mixed_format(
+    fxp_plugin_path,
+    serum2_plugin_path,
+    preset_files,
+    serum_preset_files,
+):
+    """In-process `BatchRenderer` mixed-format round-trip. Symmetric to
+    `test_parallel_batch_renderer_mixed_format` but goes through
+    `make_engine` / `render_one` rather than the loky worker — the two
+    paths share dispatch logic but boot the engine differently, so each
+    needs its own end-to-end coverage."""
+    fxp_src = preset_files[0]
+    serum_src = serum_preset_files[0]
+    config = RenderConfig(
+        fxp_plugin_path=fxp_plugin_path,
+        serum2_plugin_path=serum2_plugin_path,
+        sample_rate=44100,
+        note=48,
+        duration=1.0,
+        tail=1.0,
+    )
+    with BatchRenderer(config) as renderer:
+        results = {path: renderer.render(path) for path in (fxp_src, serum_src)}
+
+    for path, audio in results.items():
+        assert audio.shape[0] == 2, f"{path}: expected stereo"
+        assert audio.dtype == np.float32
+        assert np.max(np.abs(audio)) > SILENCE_EPS, f"{path}: silent output"
