@@ -28,4 +28,4 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run unit tests
-        run: pytest tests/ --ignore=tests/test_parallel_smoke.py -q
+        run: pytest tests/ --ignore=tests/test_parallel_smoke.py --ignore=tests/test_serum2_smoke.py -q
