@@ -1,6 +1,6 @@
 # CLAUDE.md — vst-render Implementation Guide
 
-This file is the implementation context for Claude Code. Read `DESIGN.md` first for the full specification. This document covers the *how*: build order, exact API calls, code skeletons, and constraints that the design doc omits because they're not relevant to a human reader.
+This file is the implementation context for Claude Code. Together with `CLAUDE.md` it is the live specification — read `CLAUDE.md` first for the project overview, then this file for the *how*: build order, exact API calls, code skeletons, and the constraints that the high-level doc omits. `DESIGN.md` is preserved as the original v1 design rationale, not current truth.
 
 ---
 
