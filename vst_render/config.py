@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 
 # Peak below this is treated as silent output by the renderer and worker.
@@ -26,8 +25,6 @@ class RenderConfig:
     velocity: int = 127
     duration: float = 1.0
     tail: float = 1.0
-    bit_depth: Literal["16", "24", "32f"] = "16"
-    format: Literal["wav", "npy"] = "wav"
     midi_path: str | Path | None = None
 
     def __post_init__(self) -> None:
@@ -53,9 +50,3 @@ class RenderConfig:
             raise ValueError(f"duration must be > 0, got {self.duration}")
         if self.tail < 0:
             raise ValueError(f"tail must be >= 0, got {self.tail}")
-        if self.bit_depth not in ("16", "24", "32f"):
-            raise ValueError(
-                f"bit_depth must be '16', '24', or '32f', got {self.bit_depth!r}"
-            )
-        if self.format not in ("wav", "npy"):
-            raise ValueError(f"format must be 'wav' or 'npy', got {self.format!r}")

@@ -12,8 +12,6 @@ def test_defaults_resolve():
     assert cfg.velocity == 127
     assert cfg.duration == 1.0
     assert cfg.tail == 1.0
-    assert cfg.bit_depth == "16"
-    assert cfg.format == "wav"
     assert cfg.midi_path is None
     assert cfg.serum2_plugin_path is None
 
@@ -97,25 +95,3 @@ def test_tail_zero_accepted():
     # tail=0 is legitimate for percussive one-shots that don't need a
     # release-envelope tail.
     RenderConfig(fxp_plugin_path="p", tail=0)
-
-
-@pytest.mark.parametrize("bd", ["8", "32", 16, "16bit"])
-def test_bit_depth_rejects_invalid(bd):
-    with pytest.raises(ValueError, match="bit_depth"):
-        RenderConfig(fxp_plugin_path="p", bit_depth=bd)
-
-
-@pytest.mark.parametrize("bd", ["16", "24", "32f"])
-def test_bit_depth_accepts_valid(bd):
-    RenderConfig(fxp_plugin_path="p", bit_depth=bd)
-
-
-@pytest.mark.parametrize("fmt", ["mp3", "flac", "WAV", ""])
-def test_format_rejects_invalid(fmt):
-    with pytest.raises(ValueError, match="format"):
-        RenderConfig(fxp_plugin_path="p", format=fmt)
-
-
-@pytest.mark.parametrize("fmt", ["wav", "npy"])
-def test_format_accepts_valid(fmt):
-    RenderConfig(fxp_plugin_path="p", format=fmt)
