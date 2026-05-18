@@ -29,3 +29,24 @@ jobs:
 
       - name: Run unit tests
         run: pytest tests/ --ignore=tests/test_parallel_smoke.py --ignore=tests/test_serum2_smoke.py -q
+
+  git-install:
+    # Smokes the documented `pip install git+...` flow end-to-end.
+    # Catches packaging regressions that the editable install above can hide,
+    # most notably the `[tool.hatch.metadata] allow-direct-references = true`
+    # opt-in that the serum2-preset-loader git pin depends on.
+    # Push-only: PR head SHAs aren't reachable at the canonical URL.
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install from git URL at this commit
+        run: |
+          python -m pip install --upgrade pip
+          pip install "git+https://github.com/${{ github.repository }}.git@${{ github.sha }}"
+
+      - name: Verify console script
+        run: vst-render --help

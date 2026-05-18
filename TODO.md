@@ -10,21 +10,19 @@ Open work-items, ordered by recommended next-up. Strikethrough or delete entries
 - **Gate lift — public library API** — `BatchRenderer`, `ParallelBatchRenderer`, and `render_preset` now accept `.SerumPreset` paths via auto-detection from the file suffix. `_require_fxp_plugin` removed; replaced with `_check_required_plugins`. 135/135 tests pass.
 - **DESIGN.md demoted to historical doc** — README, CLAUDE-implementation.md now point at CLAUDE.md as the live spec; DESIGN.md kept for original v1 rationale.
 - **`BatchRenderer` mixed-format smoke test** — closes the in-process coverage gap left by the gate lift, symmetric with the existing `ParallelBatchRenderer` mixed-format test.
+- **CI job for git-URL install** — new `git-install` job in `.github/workflows/tests.yml` installs from `git+https://github.com/${repo}.git@${sha}` on every push to `main` and runs `vst-render --help`. Catches the `allow-direct-references = true` opt-in regression and other packaging breakage that the editable install can hide.
 
 ---
 
 ## Next up
 
-### 1. Add CI job that installs from the git URL
-README documents `pip install git+https://github.com/wiillownet/vst-render.git`, but CI only exercises the editable install. Add a job that runs the git URL install and confirms `vst-render --help` works — catches packaging regressions, including the `[tool.hatch.metadata] allow-direct-references = true` opt-in that the `serum2-preset-loader` git pin requires.
-
-### 2. Generic `.vstpreset` support (any VST3 plugin, not just Serum 2)
+### 1. Generic `.vstpreset` support (any VST3 plugin, not just Serum 2)
 Serum 2's `.SerumPreset` shipped in 0.2.0, but the generic VST3 `.vstpreset` standard remains unsupported — that's the format Vital, Pigments, and most modern VST3 plugins use. DawDreamer's `synth.load_state(path)` accepts the inner state, but `.vstpreset` files have a small VST3 header before the state payload that needs to be stripped first. Touches `presets.py` (extension list + format enum entry), `worker.py` and `renderer.py` (third dispatch arm + per-plugin format compatibility check), `cli.py` (a third format flag, or unify under `--vst3-plugin`).
 
-### 3. Add Vital as a second supported plugin (unlocks real CI)
-Vital is free and cross-platform, so it can ship on CI runners that Serum can't. Adding Vital both proves the architecture isn't Serum-specific and lets us run smoke tests on every PR. Vital uses `.vital` preset format (its own, not `.fxp` or `.vstpreset`), so this layers cleanly on the format-dispatch already in place — a third `PresetFormat` enum entry plus a `.vital` load path in `worker.py` and `renderer.py`. Likely depends on item 2 if we want a single plugin path to support both `.vstpreset` and `.vital`.
+### 2. Add Vital as a second supported plugin (unlocks real CI)
+Vital is free and cross-platform, so it can ship on CI runners that Serum can't. Adding Vital both proves the architecture isn't Serum-specific and lets us run smoke tests on every PR. Vital uses `.vital` preset format (its own, not `.fxp` or `.vstpreset`), so this layers cleanly on the format-dispatch already in place — a third `PresetFormat` enum entry plus a `.vital` load path in `worker.py` and `renderer.py`. Likely depends on item 1 if we want a single plugin path to support both `.vstpreset` and `.vital`.
 
-### 4. macOS KNOWN_ISSUES audit pass
+### 3. macOS KNOWN_ISSUES audit pass
 Document macOS-specific quirks that the May 2026 macOS-support pass didn't fully investigate:
 - Gatekeeper / quarantine behavior on un-notarized VST bundles
 - universal2 vs arm64-only plugin builds (Rosetta implications)
