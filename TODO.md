@@ -10,7 +10,8 @@ Open work-items, ordered by recommended next-up. Strikethrough or delete entries
 - **Gate lift — public library API** — `BatchRenderer`, `ParallelBatchRenderer`, and `render_preset` now accept `.SerumPreset` paths via auto-detection from the file suffix. `_require_fxp_plugin` removed; replaced with `_check_required_plugins`. 135/135 tests pass.
 - **DESIGN.md demoted to historical doc** — README, CLAUDE-implementation.md now point at CLAUDE.md as the live spec; DESIGN.md kept for original v1 rationale.
 - **`BatchRenderer` mixed-format smoke test** — closes the in-process coverage gap left by the gate lift, symmetric with the existing `ParallelBatchRenderer` mixed-format test.
-- **CI job for git-URL install** — new `git-install` job in `.github/workflows/tests.yml` installs from `git+https://github.com/${repo}.git@${sha}` on every push to `main` and runs `vst-render --help`. Catches the `allow-direct-references = true` opt-in regression and other packaging breakage that the editable install can hide.
+- **CI job for git-URL install** — new `git-install` job in `.github/workflows/tests.yml` installs from `git+https://github.com/${repo}.git@${sha}` on every push to `main` and runs `vst-render --help`. Catches the `allow-direct-references = true` opt-in regression and other packaging breakage that the editable install can hide. (Surfaced that the repo was private; now public.)
+- **Audit-validate follow-ups cleared** — removed `RenderConfig.bit_depth` + `RenderConfig.format` (never read by any library path); dropped the `__main__` guard at the bottom of `cli.py` (console script is the only supported invocation); kept the `_do_render` midi-duration guard (job dict is a public seam per `CLAUDE.md`).
 
 ---
 
@@ -36,19 +37,4 @@ Output: new entries in `KNOWN_ISSUES.md`.
 ### Switch `serum2-preset-loader` from git pin to PyPI version
 Currently pinned to a 40-char SHA via `git+https://...@<sha>`. Once `serum2-preset-loader` ships a PyPI release, replace the git URL with a `>=x.y` version constraint. This lets us drop the `[tool.hatch.metadata] allow-direct-references = true` opt-in (assuming no other direct refs land in the meantime) and cleans up the install path. Blocked on upstream releasing.
 
----
-
-## Audit-validate follow-ups
-
-- [ ] [audit-validate] Decide what to do about `RenderConfig.bit_depth` and `RenderConfig.format` — declared + validated but never read by any library code path (CLI bypasses RenderConfig and uses its own --bit-depth/--format options; library API returns numpy without writing to disk).
-  - File: vst_render/config.py:22-23, 48-53
-  - Why deferred: removing changes the public API surface of a published library; the alternative is to wire these into a future `render_to_file` library path. Semantic call only the maintainer can make.
-  - Source: audit run on 2026-05-11
-- [ ] [audit-validate] Decide whether the `_do_render` midi-duration guard is internal-only or part of a public job-dict contract.
-  - File: vst_render/worker.py:121-125
-  - Why deferred: the comment admits it's defensive against a hypothetical third-party caller; pinned by a dedicated test. Keep if `run_batch_to_disk` job dicts are a public seam, remove if strictly internal.
-  - Source: audit run on 2026-05-11
-- [ ] [audit-validate] Decide whether `python -m vst_render.cli` is a supported invocation; if not, drop the `if __name__ == "__main__": app()` guard at the bottom of cli.py.
-  - File: vst_render/cli.py:247-248
-  - Why deferred: the `vst-render` console script entry point doesn't need the guard; the guard only enables `python -m vst_render.cli`. Whether to support that invocation is a docs/UX call.
-  - Source: audit run on 2026-05-11
+All audit-validate follow-ups from 2026-05-11 have been resolved — see `docs/audit-log.md`.

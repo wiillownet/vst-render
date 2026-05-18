@@ -26,3 +26,14 @@ All three findings duplicate already-open entries from the 2026-05-11 run (Rende
 
 ### Skipped (1)
 `vst_render/renderer.py:143-147` unreachable `else` arm — matches the 2026-05-11 rejection above; not surfaced by the audit this run.
+
+## 2026-05-17 — resolving the 2026-05-11 deferred set
+
+Maintainer dispatched all three deferred items in a single follow-up session.
+
+### Applied (2)
+- `vst_render/config.py` + `tests/test_config.py` — removed `RenderConfig.bit_depth` and `RenderConfig.format`. The fields were declared + validated but never read: the CLI builds its own job dicts with their own `--bit-depth` / `--format` flags, and the library API returns numpy without writing to disk. Net: -33 lines, breaking change for any caller passing those kwargs (none known).
+- `vst_render/cli.py` — dropped the trailing `if __name__ == "__main__": app()` guard. The `vst-render` console script entry point is the documented invocation; the guard's only purpose was enabling `python -m vst_render.cli`, which is not supported.
+
+### Kept (1)
+- `vst_render/worker.py:113-127` — `_do_render` midi-duration guard kept. The `run_batch_to_disk` job dict schema is documented in `CLAUDE.md`, which makes it a public seam for power users who skip the public renderer classes. The guard turns a confusing `None + float` TypeError into a clear ValueError naming the schema.
