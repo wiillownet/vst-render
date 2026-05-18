@@ -242,7 +242,3 @@ def render(
     for r in errors:
         typer.echo(f"  FAIL {r.get('path')}: {r.get('error')}", err=True)
     raise typer.Exit(code=1 if errors else 0)
-
-
-if __name__ == "__main__":
-    app()
