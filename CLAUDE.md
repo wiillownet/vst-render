@@ -31,6 +31,6 @@ Run fast unit tests before every commit. The smoke tests (`test_parallel_smoke.p
 
 ## Imports
 
-@CLAUDE-implementation.md
+@docs/implementation.md
 @docs/git-workflow.md
 @docs/architecture.md

@@ -17,7 +17,7 @@ Add Serum 2 pre-implementation probes
 Defensive guards from re-audit: thread safety, config freezing, midi pairing
 ```
 
-Multi-step changes that were planned as a sequence use a `Step X:` prefix (see commits `844deb6`–`4d07e49`). Use that only when a single PR-equivalent feature is being landed across multiple commits intentionally — not for normal one-off changes.
+Multi-step changes that were planned as a sequence use a `Step X:` prefix (see commits `4d07e49`–`bc8ae8d` for the Step A → F Serum 2 landing). Use that only when a single PR-equivalent feature is being landed across multiple commits intentionally — not for normal one-off changes.
 
 Body is optional. Use it when the *why* isn't obvious from the diff (compatibility fix, a non-obvious tradeoff, a workaround for an upstream bug). For routine adds/fixes/cleanups, subject-only is fine.
 

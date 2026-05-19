@@ -18,12 +18,11 @@ vst-render/
 │   └── cli.py               # Typer app — `vst-render` console script entry point
 ├── tests/                   # pytest suite; fast unit tests + slow-marked integration smokes
 ├── scripts/                 # Verification harnesses (verify_dawdreamer.py, verify_dawdreamer_serum2.py)
-├── docs/                    # This documentation
+├── docs/                    # implementation.md, architecture.md (this file), git-workflow.md, decisions.md, audit-log.md
 ├── .github/workflows/       # GitHub Actions CI (tests.yml)
 ├── pyproject.toml           # hatchling build, deps, entry point, pytest config
-├── CLAUDE.md                # Short instruction file (this skill's output)
-├── CLAUDE-implementation.md # Detailed implementation guide (DawDreamer API contracts, worker pattern, don'ts)
-├── DESIGN.md                # Original specification (predates 0.2.x; reconciliation noted in TODO.md)
+├── CLAUDE.md                # High-level project overview + workflow rules; imports the docs below
+├── DESIGN.md                # Original v1 design (Serum 1 / .fxp-only); preserved as historical rationale
 ├── KNOWN_ISSUES.md          # User-visible limitations and upstream quirks
 └── TODO.md                  # Open work-items, ordered by recommended next-up
 ```
@@ -49,7 +48,7 @@ vst-render/
 
 ## Non-obvious organisational notes
 
-- **DawDreamer import order is load-bearing.** DawDreamer uses LLVM internally; importing any other LLVM-using library before it crashes the process. `worker.py` enforces this by deferring `import dawdreamer` (and `numpy`, `soundfile`) into `init_worker()`, with only stdlib at module level. See `CLAUDE-implementation.md` § "Critical constraints" for the full rules.
+- **DawDreamer import order is load-bearing.** DawDreamer uses LLVM internally; importing any other LLVM-using library before it crashes the process. `worker.py` enforces this by deferring `import dawdreamer` (and `numpy`, `soundfile`) into `init_worker()`, with only stdlib at module level. See `docs/implementation.md` § "Critical constraints" for the full rules.
 - **One engine per worker, both synths in a shared graph.** Multiple `RenderEngine` instances per worker cause thread explosion and memory leaks (DawDreamer issues #88 + #1). The shared-graph approach was probe-verified: the idle synth produces byte-identical silence vs. a single-synth render.
 - **A warmup render runs in `init_worker`.** Serum 2 lazy-loads sample data on the first render and the cold output comes out at ~10× steady-state level. Don't remove the warmup loop without direct evidence the upstream issue is fixed (`KNOWN_ISSUES.md` documents this).
 - **Per-worker tempfiles for Serum 2.** `synth.load_state` takes a path, not bytes, so each worker's `init_worker` creates its own `mkdtemp()` dir and the worker reuses one `state.bin` (`write_bytes` overwrites). Never share the path across workers.

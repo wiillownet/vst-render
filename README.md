@@ -2,7 +2,7 @@
 
 Batch-render VST presets to audio files using [DawDreamer](https://github.com/DBraun/DawDreamer) as the headless engine. Windows and macOS; v1 officially supports Serum 1 (`.fxp`) and Serum 2 (`.SerumPreset`).
 
-See [CLAUDE.md](CLAUDE.md) and [CLAUDE-implementation.md](CLAUDE-implementation.md) for the live specification, [docs/architecture.md](docs/architecture.md) for a high-level orientation, [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for tracked limitations, and [DESIGN.md](DESIGN.md) for the original v1 design rationale.
+See [CLAUDE.md](CLAUDE.md) and [docs/implementation.md](docs/implementation.md) for the live specification, [docs/architecture.md](docs/architecture.md) for a high-level orientation, [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for tracked limitations, and [DESIGN.md](DESIGN.md) for the original v1 design rationale.
 
 ## Requirements
 

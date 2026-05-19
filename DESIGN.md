@@ -2,7 +2,7 @@
 
 > **This document is historical.** It captures the original v1 design — Serum 1, VST2, `.fxp`-only — written before any code was shipped. The package has since grown past that scope: 0.2.x adds Serum 2 (`.SerumPreset`) support via a dual-synth worker, cross-platform plugin loading (macOS `.vst` / `.vst3` bundles in addition to Windows `.dll`), and an auto-detecting public library API.
 >
-> **For the live specification, see `CLAUDE.md` and `CLAUDE-implementation.md`.** They reflect the code as it currently ships. `docs/architecture.md` is the high-level orientation; `KNOWN_ISSUES.md` tracks user-visible quirks; `TODO.md` lists open work.
+> **For the live specification, see `CLAUDE.md` and `docs/implementation.md`.** They reflect the code as it currently ships. `docs/architecture.md` is the high-level orientation; `KNOWN_ISSUES.md` tracks user-visible quirks; `TODO.md` lists open work.
 >
 > This file is preserved as the *why*: the rationale for the tech stack, the parallelism model, the filename template grammar, the bit-depth choices, and the open decisions that were resolved before implementation began. Treat its API descriptions, file lists, and "v1" non-goals as a snapshot in time, not current truth.
 
