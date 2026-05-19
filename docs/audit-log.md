@@ -37,3 +37,15 @@ Maintainer dispatched all three deferred items in a single follow-up session.
 
 ### Kept (1)
 - `vst_render/worker.py:113-127` — `_do_render` midi-duration guard kept. The `run_batch_to_disk` job dict schema is documented in `CLAUDE.md`, which makes it a public seam for power users who skip the public renderer classes. The guard turns a confusing `None + float` TypeError into a clear ValueError naming the schema.
+
+## 2026-05-19 — audit-validate
+
+### Applied (1) — tests passed
+- `vst_render/renderer.py:124-138` — removed redundant synth-None checks inside the format-dispatch arms of `render_one`. Both callers (`BatchRenderer.render`, `render_preset`) already gate via `_check_required_plugins`, and the engine's synth slots are deterministically derived from the same cfg fields by `make_engine` — the inner check was validation for a scenario that can't happen, which CLAUDE.md explicitly forbids. The `else` arm for unhandled enum values (rejected on 2026-05-11 as extensibility scaffolding for planned formats) was left untouched.
+
+### Deferred (0)
+
+### Rejected (1)
+- Duplicate `ext_for: dict[PresetFormat, str]` map between `cli.py:144-147` and `api.py:52-55` — rejected on premature-abstraction grounds. Two 4-line dicts mapping 2 enum values to suffix strings is not load-bearing duplication; the right moment to consolidate is when TODO.md's `.vstpreset` / `.vital` format additions land. Single-rejection, no decisions-log entry warranted.
+
+### Stale (0)

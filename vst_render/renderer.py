@@ -122,19 +122,9 @@ def render_one(
     fmt = format_for_path(preset_path)
 
     if fmt == PresetFormat.FXP:
-        if engine.synth_fxp is None:
-            raise RuntimeError(
-                f"Got an .fxp preset ({preset_path.name}) but the engine has "
-                "no fxp synth — RenderConfig.fxp_plugin_path was not set"
-            )
         synth = engine.synth_fxp
         synth.load_preset(str(preset_path.resolve()))
     elif fmt == PresetFormat.SERUM2:
-        if engine.synth_serum2 is None:
-            raise RuntimeError(
-                f"Got a .SerumPreset ({preset_path.name}) but the engine has "
-                "no serum2 synth — RenderConfig.serum2_plugin_path was not set"
-            )
         synth = engine.synth_serum2
         engine.serum_state_path.write_bytes(convert_preset_file(str(preset_path)))
         synth.load_state(str(engine.serum_state_path))
