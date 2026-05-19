@@ -95,16 +95,6 @@ Common options:
 
 Run `vst-render --help` for the full list.
 
-## Migrating from 0.1.x
-
-vst-render 0.2.0 reworks the plugin-path interface for Serum 2 support:
-
-- **CLI:** the leading `PLUGIN` positional argument was replaced with the named flags `--fxp` and `--serum2`. Old: `vst-render <plugin> <presets> <output>`. New: `vst-render <presets> <output> --fxp <plugin>`.
-- **Library:** `RenderConfig.plugin_path` was renamed to `RenderConfig.fxp_plugin_path`, and a `serum2_plugin_path` field was added. Existing 0.1.x code passing `plugin_path=` will raise `TypeError: unexpected keyword argument`.
-- **Tests / fixtures:** `--plugin-path` and `VST_PLUGIN_PATH` were renamed to `--fxp-plugin-path` and `VST_FXP_PLUGIN_PATH`.
-
-There is no compatibility shim — call sites need a one-time edit. Sorry.
-
 ## Library API
 
 `RenderConfig` accepts both plugin paths; the renderer auto-detects each preset's format from its file suffix and dispatches to the matching synth.
