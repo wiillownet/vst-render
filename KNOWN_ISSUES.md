@@ -92,6 +92,59 @@ Tracked user-visible limitations and upstream quirks. Not every limitation is a 
 
 ---
 
+## Quarantined plugin bundles fail to load (macOS)
+
+**Symptom:** `RuntimeError: Unable to load plugin.` from DawDreamer when pointing vst-render at a plugin that opens fine in Logic, Ableton, or Reaper. The same bundle, installed by the vendor's official installer, works without issue.
+
+**Repro:** download a `.vst3` (or `.vst` / `.component`) bundle from a browser or unzip a downloaded archive, drop it into `~/Library/Audio/Plug-Ins/VST3/`, and render with vst-render. Plugins that ship through a vendor installer (Serum, Pigments, Vital's official installer) are unaffected — installers run with admin privileges and the files they write don't inherit the quarantine attribute.
+
+**Cause:** macOS sets `com.apple.quarantine` on anything that arrives via a browser, Mail, AirDrop, or `unzip`. The first time the kernel goes to `dlopen` a quarantined Mach-O, Gatekeeper checks the code signature; if the bundle is unsigned, ad-hoc-signed, or signed but un-notarized, the load is refused. DawDreamer surfaces that as the same generic `Unable to load plugin.` it raises for any failed `dlopen`. The Python interpreter itself is already past Gatekeeper, but each new `dlopen` is a fresh check.
+
+**Detect:** `xattr -lr /path/to/Plugin.vst3 | grep com.apple.quarantine`. Any output means the bundle is quarantined. The xattr is set on files inside the bundle, not just the top-level directory — `xattr -l` on the bundle root alone may show nothing.
+
+**Workaround:** strip the xattr recursively before rendering:
+
+```bash
+xattr -dr com.apple.quarantine /path/to/Plugin.vst3
+```
+
+Only do this for bundles from a vendor you trust — you are bypassing the same check that protects against tampered downloads. Re-running the vendor's official installer is the safer fix when one exists.
+
+**Upstream:** would require DawDreamer to surface the specific dlopen error code (`EPERM` from Gatekeeper vs. `ENOEXEC` from arch mismatch vs. missing-dependency cases) instead of collapsing them all to a single string. Not tracked upstream.
+
+---
+
+## arm64-only Python can't load x86_64-only plugins, and vice versa (macOS)
+
+**Symptom:** `RuntimeError: Unable to load plugin.` for an older or unmaintained plugin that loads fine in Logic. Universal2 plugins (Serum 1, Serum 2, most modern commercial VSTs) are unaffected; this only bites with single-arch builds.
+
+**Repro:** install an x86_64-only `.vst3` (most pre-2021 commercial plugins, or any open-source plugin built without `arch -x86_64` cross-compile) on an Apple Silicon Mac with an arm64-native Python, and try to render with vst-render.
+
+**Cause:** the DawDreamer PyPI wheel for `macosx_*_arm64` ships an arm64-only `dawdreamer.so`. The macOS python.org installer, Homebrew, `uv`, and `pyenv` all default to an arm64-native interpreter on Apple Silicon. An arm64 process can only `dlopen` arm64 (or the arm64 slice of a universal2 bundle); an x86_64-only plugin has no arm64 slice and the load fails. The reverse holds under Rosetta: an x86_64 Python interpreter — explicitly chosen with `arch -x86_64` — picks up the x86_64 DawDreamer wheel and can only load x86_64 (or the x86_64 slice of universal2). It cannot load arm64-only plugins.
+
+**Detect:** check the architectures inside the plugin bundle's executable:
+
+```bash
+file "/path/to/Plugin.vst3/Contents/MacOS/Plugin"
+```
+
+You want to see either both `x86_64` and `arm64` (universal binary) or the same arch as your Python interpreter (`python3 -c "import platform; print(platform.machine())"`).
+
+**Workaround:**
+
+- Prefer a universal2 or arm64-native build of the plugin if the vendor offers one. Many vendors ship a separate "Apple Silicon" download.
+- If only an x86_64 build exists and you're on Apple Silicon: create a Rosetta venv and install vst-render into it. With Rosetta installed (`softwareupdate --install-rosetta`):
+  ```bash
+  arch -x86_64 /usr/bin/python3 -m venv .venv-x86_64
+  arch -x86_64 .venv-x86_64/bin/pip install vst-render
+  arch -x86_64 .venv-x86_64/bin/vst-render ...
+  ```
+  loky worker processes inherit the parent's architecture, so the whole batch runs under Rosetta. Don't try to mix arches in one batch — there's no way to fan out across arches from a single executor.
+
+**Upstream:** DawDreamer could ship a universal2 wheel that contains both slices and dispatches at runtime, but that doubles wheel size and isn't a common pattern for native-extension wheels. Not tracked upstream.
+
+---
+
 ## A worker crash mid-batch aborts the remaining jobs on that executor
 
 **Symptom:** after a `TerminatedWorkerError` from one render, all subsequent futures submitted to the same executor also raise, and the remaining jobs in the batch are marked as errors.

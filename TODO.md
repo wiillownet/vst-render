@@ -12,6 +12,7 @@ Open work-items, ordered by recommended next-up. Strikethrough or delete entries
 - **`BatchRenderer` mixed-format smoke test** — closes the in-process coverage gap left by the gate lift, symmetric with the existing `ParallelBatchRenderer` mixed-format test.
 - **CI job for git-URL install** — new `git-install` job in `.github/workflows/tests.yml` installs from `git+https://github.com/${repo}.git@${sha}` on every push to `main` and runs `vst-render --help`. Catches the `allow-direct-references = true` opt-in regression and other packaging breakage that the editable install can hide. (Surfaced that the repo was private; now public.)
 - **Audit-validate follow-ups cleared** — removed `RenderConfig.bit_depth` + `RenderConfig.format` (never read by any library path); dropped the `__main__` guard at the bottom of `cli.py` (console script is the only supported invocation); kept the `_do_render` midi-duration guard (job dict is a public seam per `CLAUDE.md`).
+- **macOS KNOWN_ISSUES audit pass** — added two entries to `KNOWN_ISSUES.md`: quarantined plugin bundles failing to load (Gatekeeper refuses `dlopen` on un-notarized code; detect with `xattr -lr ... | grep com.apple.quarantine`, fix with `xattr -dr com.apple.quarantine ...`) and arm64-only Python being unable to load x86_64-only plugins (DawDreamer's PyPI wheel is single-arch; workaround is a Rosetta venv).
 
 ---
 
@@ -22,13 +23,6 @@ Serum 2's `.SerumPreset` shipped in 0.2.0, but the generic VST3 `.vstpreset` sta
 
 ### 2. Add Vital as a second supported plugin (unlocks real CI)
 Vital is free and cross-platform, so it can ship on CI runners that Serum can't. Adding Vital both proves the architecture isn't Serum-specific and lets us run smoke tests on every PR. Vital uses `.vital` preset format (its own, not `.fxp` or `.vstpreset`), so this layers cleanly on the format-dispatch already in place — a third `PresetFormat` enum entry plus a `.vital` load path in `worker.py` and `renderer.py`. Likely depends on item 1 if we want a single plugin path to support both `.vstpreset` and `.vital`.
-
-### 3. macOS KNOWN_ISSUES audit pass
-Document macOS-specific quirks that the May 2026 macOS-support pass didn't fully investigate:
-- Gatekeeper / quarantine behavior on un-notarized VST bundles
-- universal2 vs arm64-only plugin builds (Rosetta implications)
-
-Output: new entries in `KNOWN_ISSUES.md`.
 
 ---
 
