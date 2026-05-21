@@ -49,3 +49,52 @@ Maintainer dispatched all three deferred items in a single follow-up session.
 - Duplicate `ext_for: dict[PresetFormat, str]` map between `cli.py:144-147` and `api.py:52-55` — rejected on premature-abstraction grounds. Two 4-line dicts mapping 2 enum values to suffix strings is not load-bearing duplication; the right moment to consolidate is when TODO.md's `.vstpreset` / `.vital` format additions land. Single-rejection, no decisions-log entry warranted.
 
 ### Stale (0)
+
+## 2026-05-20 — shared-graph rendering bug + fix
+
+**TL;DR.** When both `--fxp` and `--serum2` plugins are loaded, every `.fxp` render in the production CLI path silently produces the wrong audio. Root cause: `engine.load_graph` with two orphan source processors and no terminal mixer routes only the last-listed processor to `get_audio()`. Fixed by splitting the worker into one `RenderEngine` per loaded format.
+
+**How it was discovered.** Writing a state-contamination stress harness for the public API (`scripts/stress_state_contamination.py`). The harness renders each preset twice — once "warm" through `run_batch_to_disk` with `workers=1` chaining all presets through a single worker, once "cold" via one fresh Python subprocess per preset with only the matching plugin loaded — and diffs the resulting audio. Even a smoke run of four `.fxp` presets showed all four warm outputs with **identical** peak (0.2852-0.2855) and RMS (0.0181), while cold outputs varied per preset (peaks 0.39-1.07). That's not state contamination noise — that's the same waveform across four different presets, which is impossible if `load_preset` is updating state.
+
+**Repro, distilled.**
+```python
+import dawdreamer as daw, numpy as np
+FXP = "/Library/Audio/Plug-Ins/VST/Serum.vst"
+S2  = "/Library/Audio/Plug-Ins/VST3/Serum2.vst3"
+PRESET = "/Library/Audio/Presets/Xfer Records/Serum Presets/Presets/Bass/BA Analog Pluck [SN].fxp"
+
+def render(spec):
+    eng = daw.RenderEngine(44100, 512)
+    synths = [eng.make_plugin_processor(name, path) for name, path in spec]
+    eng.load_graph([(s, []) for s in synths])
+    for s in synths: s.clear_midi(); s.add_midi_note(48, 127, 0.0, 0.05)
+    eng.render(0.1)
+    fxp_synth = next(s for (n, _), s in zip(spec, synths) if n == "fxp")
+    fxp_synth.load_preset(PRESET)
+    fxp_synth.clear_midi(); fxp_synth.add_midi_note(48, 127, 0.0, 1.0)
+    eng.render(2.0)
+    return float(np.max(np.abs(eng.get_audio())))
+
+print(render([("fxp", FXP)]))                    # 1.0668  correct
+print(render([("fxp", FXP), ("serum2", S2)]))    # 0.2852  fxp output dropped
+print(render([("serum2", S2), ("fxp", FXP)]))    # 1.0501  reordering "fixes" it
+```
+
+Only the last processor in `load_graph` reaches `get_audio()`. The previous architecture documented a "verified finding" that *the idle synth in a shared graph is byte-identical silence relative to a single-synth render* — that's tautologically true (the idle synth's output is discarded; so is the active synth's, if it isn't last), but it was being read as "this design is correct". It wasn't.
+
+**Two fix options were probed before choosing.**
+
+*Option A — Add mixer as terminal node*: `mixer = engine.make_add_processor("mixer", [1.0, 1.0])`, then `load_graph([(synth_fxp, []), (synth_serum2, []), (mixer, ["fxp_synth", "serum2_synth"])])`. Works, but the idle synth keeps producing audio (release tails, LFOs) that sums into the active synth's output. Probed residual against a clean reference: peak diff 0.63, RMS diff 0.015 — meaningful contamination, not acceptable.
+
+*Option B — Two RenderEngines per worker, one per format*: separate engine for fxp, separate engine for serum2. Each render call touches one engine. No cross-synth state interaction, no mixer, no graph rebuilds between renders. Slightly more memory (one extra `RenderEngine` per worker) but no extra plugin instances. The CLAUDE.md rule was "no engines in a loop" — two static engines built once in `init_worker` doesn't violate that. **Picked option B.**
+
+### Applied
+- `vst_render/renderer.py` — `Engine` dataclass now holds `engine_fxp`, `engine_serum2`, `synth_fxp`, `synth_serum2`. `make_engine` creates one `RenderEngine` per loaded plugin, with its synth as the sole graph node and its own warmup render. `render_one` selects the active engine based on the preset's format.
+- `vst_render/worker.py` — module globals split into `_engine_fxp` / `_engine_serum2` (plus the matching `_synth_*` and `_serum_state_path`). `init_worker` builds each engine separately. `_do_render` picks the engine to render and `get_audio` on based on `job["preset_format"]`.
+- `tests/test_worker.py` — `test_do_render_serum2_dispatch_calls_load_state` updated to patch `_engine_serum2` instead of the now-gone `_engine`. All 116 fast unit tests pass.
+- `docs/implementation.md` § Critical constraints #3 — rewrote to reflect the per-format engine layout and retract the "byte-identical silence" claim.
+- `docs/architecture.md` — opening paragraph + organisational-notes bullet updated for the same reason.
+
+### Follow-up
+- During the probe of Option B, two consecutive renders of the *same* preset (with an unrelated render between them on the other engine) came out non-identical (peak diff up to 0.51). That's a separate state-contamination issue inside the plugin — not the load_graph bug. Logged as a TODO entry. The state-contamination stress harness (`scripts/stress_state_contamination.py`) is the right tool to characterise it once we want to dig in.
+- `scripts/verify_dawdreamer.py` and `scripts/verify_dawdreamer_serum2.py` were the source of the tautological probe finding. Worth a re-read pass to retract or correct any other shared-graph claims they make; not done in this commit.

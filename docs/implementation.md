@@ -128,9 +128,11 @@ This applies to `worker.py` (inside `init_worker`), `renderer.py` (if using DawD
 
 Threading causes DawDreamer to hang after the first render completes. This is a confirmed bug in DawDreamer's JUCE internals — `insideVSTCallback` and related static variables are not thread-safe. **Use only `multiprocessing` or loky (which uses multiprocessing).** Do not use `threading.Thread`, `concurrent.futures.ThreadPoolExecutor`, or `asyncio` with DawDreamer calls.
 
-### 3. One RenderEngine per worker, created once. Both synths share the engine.
+### 3. One RenderEngine per loaded format per worker, created once. Format engines do NOT share.
 
-Never create multiple `RenderEngine` instances inside a loop. Creating engines in a loop causes thread explosion (GitHub Issue #88) and memory leaks (Issue #1). When both `.fxp` and `.SerumPreset` rendering is enabled, both synths live in the **same engine's graph** — the idle synth in a shared graph is byte-identical silence relative to a single-synth render (probe-verified). Build the graph once in `init_worker`; subsequent `load_preset()` / `load_state()` calls update processor state in place.
+Never create `RenderEngine` instances inside a loop or per-job. Creating engines in a loop causes thread explosion (GitHub Issue #88) and memory leaks (Issue #1). When both `.fxp` and `.SerumPreset` rendering is enabled, each plugin gets its **own dedicated engine** — built once in `init_worker`, reused for every job in that format. Subsequent `load_preset()` / `load_state()` calls update processor state in place.
+
+Earlier code put both synths into one engine's graph as orphan source nodes. That doesn't work: `engine.load_graph` with multiple orphan source processors and no terminal mixer routes only the last processor in the list to `get_audio()`; every other synth's output is silently discarded. The original "idle synth is byte-identical silence" probe was a tautology — yes, the idle synth was silent at the output, but so would the active synth have been if it weren't last. See `docs/audit-log.md` 2026-05-20 for the repro and the fix.
 
 ### 4. All paths passed to DawDreamer must be absolute strings
 

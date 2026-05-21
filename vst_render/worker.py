@@ -13,10 +13,13 @@ from pathlib import Path
 logger = logging.getLogger("vst_render")
 
 # Module-level globals populated by init_worker, reused for every task.
-# Either synth may be None depending on which plugin paths were supplied —
-# _do_render dispatches on job["preset_format"] and refuses if the matching
-# synth isn't loaded.
-_engine = None
+# One RenderEngine per loaded format — see docs/audit-log.md 2026-05-20
+# for why these can't share a single engine. Either pair (engine + synth)
+# may be None depending on which plugin paths were supplied; _do_render
+# dispatches on job["preset_format"] and refuses if the matching engine
+# isn't loaded.
+_engine_fxp = None
+_engine_serum2 = None
 _synth_fxp = None
 _synth_serum2 = None
 # Per-worker tempfile path used to round-trip Serum 2 state from
@@ -34,9 +37,13 @@ def init_worker(
 ) -> None:
     """
     Called once per worker process by loky. Builds one DawDreamer engine
-    with one or both synths loaded into a single graph (probe 1: an idle
-    synth in a shared graph is byte-identical silence relative to the
-    single-synth render).
+    PER LOADED FORMAT — fxp and serum2 cannot share an engine.
+
+    The earlier shared-graph design routed both synths as orphan source
+    nodes into one engine. `engine.load_graph` with multiple orphan
+    sources and no terminal mixer routes only the last processor in the
+    list to `get_audio()`; the other synths' output is silently dropped.
+    See docs/audit-log.md 2026-05-20 for the repro and root cause.
 
     At least one of `fxp_plugin_path` or `serum2_plugin_path` must be set.
 
@@ -47,9 +54,7 @@ def init_worker(
 
     Each loaded synth gets a warmup render before init returns — Serum 2
     lazy-loads sample data on first render, and the cold render produces
-    audio at ~10x the steady-state level. Workers must absorb that
-    anomaly here so the user's first job in the batch isn't off-level
-    (probe 1 finding).
+    audio at ~10x the steady-state level.
     """
     # Validate args before loading dawdreamer — both to keep the bad-args
     # path cheap and so a unit test can exercise this guard without paying
@@ -68,40 +73,30 @@ def init_worker(
     # module level". Defer.
     from serum2_preset_loader import convert_preset_file  # noqa: F401
 
-    global _engine, _synth_fxp, _synth_serum2, _serum_state_path
+    global _engine_fxp, _engine_serum2, _synth_fxp, _synth_serum2, _serum_state_path
 
-    _engine = daw.RenderEngine(sample_rate, 512)
-
-    processors: list = []
     if fxp_plugin_path is not None:
         resolved = str(Path(fxp_plugin_path).resolve())
-        _synth_fxp = _engine.make_plugin_processor("fxp_synth", resolved)
-        processors.append((_synth_fxp, []))
+        _engine_fxp = daw.RenderEngine(sample_rate, 512)
+        _synth_fxp = _engine_fxp.make_plugin_processor("fxp_synth", resolved)
+        _engine_fxp.load_graph([(_synth_fxp, [])])
+        _synth_fxp.clear_midi()
+        _synth_fxp.add_midi_note(48, 127, 0.0, 0.05)
+        _engine_fxp.render(0.1)
+
     if serum2_plugin_path is not None:
         resolved = str(Path(serum2_plugin_path).resolve())
-        _synth_serum2 = _engine.make_plugin_processor("serum2_synth", resolved)
-        processors.append((_synth_serum2, []))
-
-    _engine.load_graph(processors)
-
-    # Per-worker tempfile dir. Only created when this worker will actually
-    # run serum2 jobs — mirrors renderer.py:84-88. mkdtemp() is unique per
-    # call; loky workers exiting cleanly is best-effort, so we don't rely
-    # on cleanup. Each serum2 job overwrites state.bin via write_bytes.
-    if serum2_plugin_path is not None:
+        _engine_serum2 = daw.RenderEngine(sample_rate, 512)
+        _synth_serum2 = _engine_serum2.make_plugin_processor("serum2_synth", resolved)
+        _engine_serum2.load_graph([(_synth_serum2, [])])
+        # Per-worker tempfile dir. mkdtemp() is unique per call; loky
+        # workers exiting cleanly is best-effort, so we don't rely on
+        # cleanup. Each serum2 job overwrites state.bin via write_bytes.
         tmpdir = tempfile.mkdtemp(prefix="vst_render_serum2_")
         _serum_state_path = Path(tmpdir) / "state.bin"
-
-    # Warmup renders. Short 0.1s renders are enough to pull Serum 2's
-    # samples off disk; the engine renders both synths simultaneously,
-    # so by the time both warmup passes complete each synth has been
-    # asked to render at least once.
-    for synth in (_synth_fxp, _synth_serum2):
-        if synth is None:
-            continue
-        synth.clear_midi()
-        synth.add_midi_note(48, 127, 0.0, 0.05)
-        _engine.render(0.1)
+        _synth_serum2.clear_midi()
+        _synth_serum2.add_midi_note(48, 127, 0.0, 0.05)
+        _engine_serum2.render(0.1)
 
     logger.debug(
         "Worker initialized (fxp=%s, serum2=%s)",
@@ -134,6 +129,7 @@ def _do_render(job: dict):
                 "init_worker was called without fxp_plugin_path"
             )
         synth = _synth_fxp
+        active_engine = _engine_fxp
         synth.load_preset(job["preset_path"])
     elif fmt == "serum2":
         if _synth_serum2 is None:
@@ -143,6 +139,7 @@ def _do_render(job: dict):
             )
         from serum2_preset_loader import convert_preset_file
         synth = _synth_serum2
+        active_engine = _engine_serum2
         state_blob = convert_preset_file(job["preset_path"])
         # write_bytes (not append) so blob-size variance across presets
         # doesn't leave stale tail bytes from a larger prior blob.
@@ -161,8 +158,8 @@ def _do_render(job: dict):
         synth.add_midi_note(job["note"], job["velocity"], 0.0, job["duration"])
         render_duration = job["duration"] + job["tail"]
 
-    _engine.render(render_duration)
-    audio = _engine.get_audio()  # (2, N) float32
+    active_engine.render(render_duration)
+    audio = active_engine.get_audio()  # (2, N) float32
 
     if np.max(np.abs(audio)) < SILENCE_EPS:
         logger.warning("Silent output for preset: %s", job["preset_path"])

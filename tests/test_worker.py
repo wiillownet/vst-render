@@ -118,7 +118,8 @@ def test_do_render_serum2_dispatch_calls_load_state(monkeypatch, tmp_path):
             import numpy as np
             return np.zeros((2, 4410), dtype="float32")
 
-    monkeypatch.setattr(worker, "_engine", FakeEngine())
+    monkeypatch.setattr(worker, "_engine_fxp", None)
+    monkeypatch.setattr(worker, "_engine_serum2", FakeEngine())
     monkeypatch.setattr(worker, "_synth_fxp", None)
     monkeypatch.setattr(worker, "_synth_serum2", FakeSynth())
     monkeypatch.setattr(worker, "_serum_state_path", state_path)

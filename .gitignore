@@ -8,6 +8,8 @@ dist/
 .pytest_cache/
 output/
 scratch_output/
+stress_state_contamination*/
+debug_*/
 *.wav
 *.npy
 .vscode/

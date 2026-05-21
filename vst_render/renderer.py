@@ -25,14 +25,25 @@ logger = logging.getLogger("vst_render")
 
 @dataclass
 class Engine:
-    """One DawDreamer engine with one or both synths loaded into a single graph.
+    """One DawDreamer RenderEngine PER LOADED FORMAT.
 
-    Mirrors the worker.py layout but lives in the main process — used by
-    BatchRenderer and render_preset. Either synth may be None if the
-    corresponding plugin path wasn't supplied; render_one's dispatch refuses
-    formats whose synth isn't loaded.
+    Earlier versions of this code put both synths into a single engine's
+    graph as orphan source nodes. That doesn't work: `engine.load_graph`
+    with multiple source processors and no terminal mixer routes only the
+    last processor in the list to `get_audio()` — every other synth's
+    output is silently discarded. The previous "idle synth = byte-
+    identical silence" probe was a tautology: yes, the idle synth was
+    silent at the output, but so would the active synth have been if it
+    weren't last. See `docs/audit-log.md` 2026-05-20 for the full repro.
+
+    Holding two engines (each with a single synth) is the simplest fix:
+    each render call operates on exactly one engine, so output routing is
+    unambiguous and the synths can't contaminate each other through
+    persistent internal state (LFOs, release tails, modulators) summing
+    into the wrong job's audio.
     """
-    engine: object
+    engine_fxp: object | None
+    engine_serum2: object | None
     synth_fxp: object | None
     synth_serum2: object | None
     # Per-engine tempfile for the serum2 state.bin round-trip. Reused for
@@ -45,14 +56,14 @@ def make_engine(
     serum2_plugin_path: str | Path | None,
     sample_rate: int,
 ) -> Engine:
-    """Build a RenderEngine + one or both PluginProcessors + audio graph.
+    """Build one RenderEngine per loaded format.
 
     At least one of `fxp_plugin_path` / `serum2_plugin_path` must be set.
 
-    Issues a 0.1s warmup render against each loaded synth before returning —
-    Serum 2 lazy-loads sample data on first render, and the cold render
-    comes out at ~10x steady-state level. Workers absorb this in init and
-    so do we, so the caller's first render is correct.
+    Each loaded synth gets a 0.1s warmup render on its own engine before
+    returning — Serum 2 lazy-loads sample data on first render and the
+    cold render comes out at ~10x steady-state level. Workers absorb this
+    in init and so do we, so the caller's first render is correct.
     """
     if fxp_plugin_path is None and serum2_plugin_path is None:
         raise ValueError(
@@ -60,40 +71,39 @@ def make_engine(
             "serum2_plugin_path"
         )
 
-    engine = daw.RenderEngine(sample_rate, 512)
+    engine_fxp = None
+    engine_serum2 = None
     synth_fxp = None
     synth_serum2 = None
     serum_state_path: Path | None = None
 
-    processors: list = []
     if fxp_plugin_path is not None:
-        synth_fxp = engine.make_plugin_processor(
+        engine_fxp = daw.RenderEngine(sample_rate, 512)
+        synth_fxp = engine_fxp.make_plugin_processor(
             "fxp_synth", str(Path(fxp_plugin_path).resolve())
         )
-        processors.append((synth_fxp, []))
+        engine_fxp.load_graph([(synth_fxp, [])])
+        synth_fxp.clear_midi()
+        synth_fxp.add_midi_note(48, 127, 0.0, 0.05)
+        engine_fxp.render(0.1)
+
     if serum2_plugin_path is not None:
-        synth_serum2 = engine.make_plugin_processor(
+        engine_serum2 = daw.RenderEngine(sample_rate, 512)
+        synth_serum2 = engine_serum2.make_plugin_processor(
             "serum2_synth", str(Path(serum2_plugin_path).resolve())
         )
-        processors.append((synth_serum2, []))
-
-    engine.load_graph(processors)
-
-    if synth_serum2 is not None:
+        engine_serum2.load_graph([(synth_serum2, [])])
         # Per-engine tempfile dir. mkdtemp() is unique per call; we don't
         # rely on cleanup (process exit is best-effort).
         tmpdir = tempfile.mkdtemp(prefix="vst_render_serum2_")
         serum_state_path = Path(tmpdir) / "state.bin"
-
-    for synth in (synth_fxp, synth_serum2):
-        if synth is None:
-            continue
-        synth.clear_midi()
-        synth.add_midi_note(48, 127, 0.0, 0.05)
-        engine.render(0.1)
+        synth_serum2.clear_midi()
+        synth_serum2.add_midi_note(48, 127, 0.0, 0.05)
+        engine_serum2.render(0.1)
 
     return Engine(
-        engine=engine,
+        engine_fxp=engine_fxp,
+        engine_serum2=engine_serum2,
         synth_fxp=synth_fxp,
         synth_serum2=synth_serum2,
         serum_state_path=serum_state_path,
@@ -123,9 +133,11 @@ def render_one(
 
     if fmt == PresetFormat.FXP:
         synth = engine.synth_fxp
+        active_engine = engine.engine_fxp
         synth.load_preset(str(preset_path.resolve()))
     elif fmt == PresetFormat.SERUM2:
         synth = engine.synth_serum2
+        active_engine = engine.engine_serum2
         engine.serum_state_path.write_bytes(convert_preset_file(str(preset_path)))
         synth.load_state(str(engine.serum_state_path))
     else:
@@ -149,8 +161,8 @@ def render_one(
         synth.add_midi_note(note, velocity, 0.0, duration)
         render_duration = duration + tail
 
-    engine.engine.render(render_duration)
-    audio = engine.engine.get_audio()
+    active_engine.render(render_duration)
+    audio = active_engine.get_audio()
 
     if np.max(np.abs(audio)) < SILENCE_EPS:
         logger.warning("Silent output for preset: %s", preset_path)
