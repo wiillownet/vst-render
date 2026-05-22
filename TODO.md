@@ -24,8 +24,25 @@ Serum 2's `.SerumPreset` shipped in 0.2.0, but the generic VST3 `.vstpreset` sta
 ### 2. Add Vital as a second supported plugin (unlocks real CI)
 Vital is free and cross-platform, so it can ship on CI runners that Serum can't. Adding Vital both proves the architecture isn't Serum-specific and lets us run smoke tests on every PR. Vital uses `.vital` preset format (its own, not `.fxp` or `.vstpreset`), so this layers cleanly on the format-dispatch already in place — a third `PresetFormat` enum entry plus a `.vital` load path in `worker.py` and `renderer.py`. Likely depends on item 1 if we want a single plugin path to support both `.vstpreset` and `.vital`.
 
-### 3. Characterise plugin state contamination across consecutive renders
-Surfaced while probing the fix for the 2026-05-20 shared-graph bug. With a single engine + single synth + same preset rendered twice in a row (no plugin reload between, just `load_preset(SAME_PATH)` + new `clear_midi`/`add_midi_note`), Serum 1 produced audio with a max-abs diff of ~0.5 between the two renders. Same setup with Serum 2 differed by ~0.3. The plugin retains internal state (LFO phase, envelope position, sample buffers, modulator residue) that `load_preset` / `load_state` doesn't fully reset. Impact: every batch render of >1 preset has some amount of non-determinism that depends on render order. The `scripts/stress_state_contamination.py` harness (committed alongside this) is built to measure the magnitude across all 1491 factory presets — pending the user kicking off the full run. Not a CLI bug per se, but a documented honesty issue: we shouldn't promise bit-identical reproducibility for batch outputs until we know how much contamination there is and whether a workaround (clear_midi + idle render to drain tail before each job, or full plugin reload) is viable.
+### 3. Mitigate plugin state contamination across consecutive renders
+Surfaced while probing the fix for the 2026-05-20 shared-graph bug, then measured against the full factory libraries on 2026-05-21 with `scripts/stress_state_contamination.py` (warm pass: single worker, presets chained; cold pass: fresh subprocess per preset). Results across 1491 presets:
+
+| Format | n | p50 max_abs | p90 | p99 | max | audible (≥0.01) |
+|---|---|---|---|---|---|---|
+| fxp    | 744 | 0.639 | 1.507 | 3.702 | 5.561 | 741 (99.6%) |
+| serum2 | 747 | 0.371 | 1.077 | 2.393 | 5.890 | 710 (95.0%) |
+
+The median preset's warm-vs-cold residual is the same order of magnitude as the audio itself; max residual is 5.89 (greater than full-scale — Serum 2 lazy-loaded sample data leaking past the per-engine warmup into per-preset territory). 1451/1491 (97%) of all presets show audible variation. Only 13 are bit-identical and those are mostly silent-output presets where both passes produce silence.
+
+The plugin retains internal state (LFO phase, envelope position, sample buffers, modulator residue) that `load_preset` / `load_state` doesn't fully reset. Impact: every batch render is non-deterministic in render order — re-running the same batch with `--skip-existing` removed produces different audio per preset. Not a CLI bug, but a reproducibility issue we should document and mitigate.
+
+Mitigation options to probe (none implemented):
+- **Per-job warmup**: render a short note before each real render and discard. Doubles compute per render but cheap to test.
+- **Per-job `clear_midi` + idle render**: drain envelope/LFO tail before loading the next preset. Cheaper than full warmup.
+- **Per-job plugin reload**: tear down + rebuild the synth. Most expensive (~100ms `make_plugin_processor` per job) but guaranteed clean.
+- **Send all-notes-off + a fresh `load_preset`/`load_state` cycle**: cheapest if it works.
+
+Full diff CSV at `stress_state_contamination_full/diff.csv` (gitignored). KNOWN_ISSUES.md has a user-facing entry pointing at this for the reproducibility caveat.
 
 ---
 

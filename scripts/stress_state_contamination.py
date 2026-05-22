@@ -3,8 +3,12 @@ State-contamination stress test.
 
 Renders every preset in two passes and diffs the audio:
   Warm pass  - workers=1, all presets chained through a single worker
-               that has BOTH synths loaded in a shared graph (the
-               production CLI path).
+               that has BOTH plugins loaded (each in its own
+               RenderEngine post-2026-05-20 fix). fxp presets all go
+               through the shared engine_fxp + synth_fxp; serum2
+               presets all go through engine_serum2 + synth_serum2.
+               State carries between consecutive renders of the same
+               format. This is the production CLI path.
   Cold pass  - one fresh Python process per preset, only the matching
                plugin loaded. Parallelised at the subprocess level so
                the wall clock stays reasonable; each individual cold

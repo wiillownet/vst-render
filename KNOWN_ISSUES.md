@@ -145,6 +145,22 @@ You want to see either both `x86_64` and `arm64` (universal binary) or the same 
 
 ---
 
+## Batch renders are not bit-reproducible — output depends on preset order
+
+**Symptom:** rendering the same preset library twice produces audibly different audio for almost every preset. Re-rendering a single preset in isolation (one preset, fresh worker) produces yet another result that differs from the batch output.
+
+**Repro:** render the same `.fxp` or `.SerumPreset` library twice with `vst-render` (different output directories, or delete and re-run); diff the WAVs. Then render any single preset alone and diff against the batch version.
+
+**Cause:** Serum 1 and Serum 2 retain internal DSP state across consecutive renders that `load_preset` / `load_state` does not fully reset — LFO phase, envelope position, modulator residue, lazy-loaded sample buffers. The first preset rendered in a fresh worker hits cold state; every subsequent preset inherits the previous one's tail. Measured across 1491 factory presets on 2026-05-21: 97% of presets show audible (max_abs ≥ 0.01) variation between "rendered in a chained batch" and "rendered in a fresh subprocess". Median residual is 0.64 for fxp / 0.37 for serum2 — comparable to the amplitude of the audio itself.
+
+**Workaround:** there isn't a clean one yet. Two partial mitigations:
+- Run with `--workers 1` and accept order-dependence — outputs are at least reproducible *within a fixed preset order*, since the same input sequence produces the same internal-state sequence.
+- For one-off renders where bit-exactness matters, run vst-render against a single preset (the cold path) rather than as part of a batch.
+
+**Tracking:** `TODO.md` item 3 documents the measurements and the mitigation options being evaluated (per-job warmup render, per-job idle drain, per-job plugin reload). Full diff CSV is produced by `scripts/stress_state_contamination.py`.
+
+---
+
 ## A worker crash mid-batch aborts the remaining jobs on that executor
 
 **Symptom:** after a `TerminatedWorkerError` from one render, all subsequent futures submitted to the same executor also raise, and the remaining jobs in the batch are marked as errors.

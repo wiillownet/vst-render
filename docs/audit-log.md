@@ -98,3 +98,88 @@ Only the last processor in `load_graph` reaches `get_audio()`. The previous arch
 ### Follow-up
 - During the probe of Option B, two consecutive renders of the *same* preset (with an unrelated render between them on the other engine) came out non-identical (peak diff up to 0.51). That's a separate state-contamination issue inside the plugin — not the load_graph bug. Logged as a TODO entry. The state-contamination stress harness (`scripts/stress_state_contamination.py`) is the right tool to characterise it once we want to dig in.
 - `scripts/verify_dawdreamer.py` and `scripts/verify_dawdreamer_serum2.py` were the source of the tautological probe finding. Worth a re-read pass to retract or correct any other shared-graph claims they make; not done in this commit.
+
+## 2026-05-21 — state-contamination characterisation + phase profiling
+
+Follow-on to the 2026-05-20 fix: the stress harness was built to detect "warm chain" vs "fresh cold subprocess" divergence — that's what surfaced the load_graph bug. With the fix in place we ran the harness against the full factory libraries and added a separate phase profiler (`scripts/profile_render_phases.py`) to break down where time goes per render.
+
+### State contamination — full sweep results
+
+Harness: `scripts/stress_state_contamination.py` against 744 `.fxp` + 747 `.SerumPreset` factory presets.
+
+Wall-clock totals on an Apple Silicon Mac:
+
+| Pass | Time | Throughput |
+|---|---|---|
+| Warm (workers=1, sequential) | 510 s | 2.92 presets/s |
+| Cold (4 parallel subprocesses) | 315 s | 4.73 presets/s (wall) |
+| Diff | 2.2 s | — |
+| **Total** | **~14 min** | — |
+
+Diff bucketing (max_abs of warm − cold residual, 32-bit float WAV):
+
+| Bucket | Count | % |
+|---|---|---|
+| Bit-identical (<1e-7) | 13 | 0.9% |
+| Near-zero (<1e-4) | 14 | 0.9% |
+| Audible (≥1e-2) | **1451** | **97.3%** |
+
+Per-format distribution:
+
+| Format | n | p50 max_abs | p90 | p99 | max |
+|---|---|---|---|---|---|
+| fxp    | 744 | 0.639 | 1.507 | 3.702 | 5.561 |
+| serum2 | 747 | 0.371 | 1.077 | 2.393 | 5.890 |
+
+The median preset's residual is the same order of magnitude as the audio itself. Top offenders peak at ~5.9 — Serum 2 sample-loading anomaly leaking past the per-engine warmup into per-preset territory.
+
+Takeaway: `load_preset` / `load_state` updates parameter state in place, but does not fully reset DSP state (LFO phase, envelope position, modulator residue, lazy-loaded sample buffers). Every batch render of >1 preset depends on render order. Documented in TODO.md item 3 (mitigation options to probe) and KNOWN_ISSUES.md (user-facing reproducibility caveat). Full CSV at `stress_state_contamination_full/diff.csv`, gitignored.
+
+### Phase profiling — where the time actually goes
+
+Harness: `scripts/profile_render_phases.py`, 30 fxp + 30 serum2 presets, in-process for warm path + subprocess-per-preset for cold path. All numbers are means in milliseconds.
+
+**Warm path (per render, after worker boot — this is what production CLI pays per job):**
+
+| Phase | fxp | fxp % | serum2 | serum2 % |
+|---|---|---|---|---|
+| `load_preset` / `load_state` | **293** | **89%** | **72** | 35% |
+| `convert_preset_file` (cbor2+zstd) | — | — | 9 | 4% |
+| `engine.render` (2s audio) | 34 | 10% | **121** | **59%** |
+| `clear_midi` + `add_midi_note` | <0.01 | — | <0.01 | — |
+| `get_audio` | 0.08 | — | 0.07 | — |
+| `sf.write` (float WAV) | 1.3 | — | 1.3 | — |
+| **TOTAL per render** | **328** | | **204** | |
+
+**Cold path (per subprocess — harness pays this 1491×; production pays it once per worker):**
+
+| Phase | fxp | serum2 |
+|---|---|---|
+| Python imports (dawdreamer + np + sf) | 63 | 80 (+17 for serum2_preset_loader) |
+| `RenderEngine()` | <0.05 | <0.05 |
+| `make_plugin_processor` | 127 | 87 |
+| `load_graph` | <0.02 | <0.02 |
+| Warmup render | 0.34 | 5.28 |
+| `load_preset` / `load_state` | 288 | 144 |
+| Actual render + `get_audio` | 36 | 124 |
+| `sf.write` | 1.6 | 1.4 |
+| **TOTAL in child** | **516** | **442** |
+| Outer subprocess overhead (fork+pipe) | +63 | +73 |
+| **Wall per subprocess** | **579** | **515** |
+
+### Surprises and implications
+
+- **fxp is dominated by `load_preset` (89% of per-render cost)** — Serum 1 re-initialises wavetables on every preset load. Not amortisable; DawDreamer doesn't expose a "preset state" handle.
+- **serum2 is split between `load_state` and `engine.render`** — actual rendering is the larger half. Render cost scales with voice count / sample complexity.
+- **Plugin boot is much cheaper than expected** — 87–127 ms, not the 3–5 s I'd guessed. Serum lazy-loads wavetables on first `load_preset`, not on `make_plugin_processor`.
+- **Subprocess overhead is small** (~150 ms total: imports + plugin boot + fork+pipe). The cold pass is slow because it pays the per-preset `load_preset` cost 1491 times, not because subprocess startup is heavy.
+- **`engine.render` is fast**: 60× real-time for fxp, 17× for serum2. The renderer isn't the bottleneck.
+- **`convert_preset_file`, `sf.write`, `get_audio`, MIDI scheduling are all sub-millisecond** — none worth optimising.
+
+**Projected production throughput** on the full 1491-preset library with `--workers 5` (each worker amortises its boot): 1491 × ~270 ms ÷ 5 ≈ **80 s wall-clock**. The stress harness is ~10× slower than production by design (workers=1 in warm pass; subprocess-per-preset in cold pass).
+
+### Applied
+- `TODO.md` item 3 — replaced "pending the user kicking off the full run" with the measured numbers + mitigation-options shortlist.
+- `KNOWN_ISSUES.md` — new entry "Batch renders are not bit-reproducible — output depends on preset order".
+- `scripts/profile_render_phases.py` — new file. Phase profiler, runnable standalone, no test-suite deps.
+- `scripts/stress_state_contamination.py` — docstring updated to reflect post-2026-05-20 architecture (per-format engines, not shared graph).
