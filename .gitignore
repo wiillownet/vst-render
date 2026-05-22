@@ -19,3 +19,5 @@ debug_*/
 .claude/settings.local.json
 .DS_Store
 CLAUDE.local.md
+/stress_throughput_workers_fxponly*
+/stress_throughput_workers_serum2only*

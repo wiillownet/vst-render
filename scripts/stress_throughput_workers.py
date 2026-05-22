@@ -120,7 +120,7 @@ def _build_jobs(
 
 def _run_one(
     workers: int, jobs: list[dict], out_dir: Path,
-    fxp_plugin: str, serum2_plugin: str, keep_outputs: bool,
+    fxp_plugin: str | None, serum2_plugin: str | None, keep_outputs: bool,
 ) -> dict:
     from vst_render.batch import run_batch_to_disk
 
@@ -209,6 +209,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.fxp_dir is None and args.serum2_dir is None:
         parser.error("provide at least one of --fxp-dir / --serum2-dir")
 
+    # If a dir is omitted, the matching plugin is irrelevant — drop it so
+    # workers don't init a synth they have no jobs for. Makes single-format
+    # isolation sweeps actually single-format.
+    fxp_plugin = args.fxp_plugin if args.fxp_dir is not None else None
+    serum2_plugin = args.serum2_plugin if args.serum2_dir is not None else None
+
     worker_counts = [int(x) for x in args.workers.split(",") if x.strip()]
     logger.info("sweeping worker counts: %s", worker_counts)
     logger.info("CPU: physical=%s logical=%s",
@@ -230,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("=== sweeping workers=%d ===", w)
         r = _run_one(
             w, jobs, args.out_dir,
-            args.fxp_plugin, args.serum2_plugin, args.keep_outputs,
+            fxp_plugin, serum2_plugin, args.keep_outputs,
         )
         logger.info(
             "  w=%d done: %.1fs total, %.2f/s, %.1f ms/render (ok=%d err=%d)",

@@ -215,3 +215,38 @@ Harness: `scripts/stress_throughput_workers.py`, full library, single 16-bit WAV
 ### Applied
 - `scripts/stress_throughput_workers.py` — new file. Sweeps worker counts over the full library, writes CSV at `./stress_throughput_workers/throughput.csv`.
 - `.gitignore` — added `/stress_throughput_workers*` (anchored to repo root).
+
+## 2026-05-22 — single-format isolation throughput
+
+Follow-on: re-ran the throughput sweep with only one plugin loaded per pass, to test whether dual-engine init or some cross-plugin interaction was costing real time in the mixed sweep. Harness reused; one-line change so `--fxp-dir`/`--serum2-dir` being absent suppresses the matching plugin too (otherwise workers init a synth they have no jobs for).
+
+Hardware: Apple M2 (4P + 4E cores). Sweep: w=1,2,4,8. 744 fxp + 747 serum2 presets.
+
+| Workers | fxp-only | serum2-only | Mixed (2026-05-22 above) |
+|---|---|---|---|
+| 1 | 246.5 s · 3.02/s · 331 ms · 1.00 eff | 264.0 s · 2.83/s · 354 ms · 1.00 eff | 539.4 s · 2.76/s · 362 ms · 1.00 eff |
+| 2 | 113.4 s · 6.56/s · 152 ms · **1.09 eff** | 167.6 s · 4.46/s · 224 ms · 0.79 eff | 287.5 s · 5.19/s · 193 ms · 0.94 eff |
+| 4 | 54.7 s · 13.59/s · 74 ms · **1.13 eff** | **133.4 s** · 5.60/s · 179 ms · 0.49 eff | 183.3 s · 8.13/s · 123 ms · 0.74 eff |
+| 8 | **27.5 s** · 27.08/s · 37 ms · **1.12 eff** | 148.2 s · 5.04/s · 198 ms · 0.22 eff **(regressed from w=4)** | 151.5 s · 9.84/s · 102 ms · 0.45 eff |
+
+### Findings
+
+- **fxp scales super-linearly.** Efficiency 1.09–1.13 across w=2/4/8. Likely cache or thermal effects: at w=1 a single P-core churns 744 wavetable loads through cache; spreading the load reduces L2/L3 thrash and avoids sustained-clock thermal throttling. The effect is consistent (not noise) — fxp w=8 hits 36.9 ms/render vs serial-projection 41.4 ms.
+- **serum2 anti-scales past w=4.** w=4 (133.4 s) is the wall-clock minimum; w=8 regresses to 148.2 s. Sweet spot is w=4 at efficiency 0.49. Beyond 4 workers the heavy-tail multi-sample presets (KIT/PN/Pad in the Factory bank) contend on sample-buffer I/O or allocator locks. The same effect is visible mid-batch in the mixed sweep: throughput drops from 27/s to 12/s around the 1118/1491 mark, where those presets cluster.
+- **fxp w=8 is 5.4× faster per render than serum2 w=8** (37 vs 198 ms) for comparable preset count.
+- **Mixed wall-clock is gated by serum2.** Mixed w=8 (151.5 s) ≈ serum2-only w=8 (148.2 s). The fxp jobs ride along essentially for free; their per-render cost is absorbed into the serum2 wait.
+- **Dual-engine init overhead is negligible.** Mixed w=1 (539.4 s) − fxp w=1 (246.5 s) − serum2 w=1 (264.0 s) = 29 s, spread across 1491 renders ≈ 19 ms each. Most of that is probably just the second `make_plugin_processor` at worker start, not per-job interference.
+
+### Implications
+
+- **`--workers` recommendation depends on the load mix**, not just on CPU count:
+  - fxp-only: use **w=8** (CPU count). Super-linear scaling — no reason to hold back.
+  - serum2-only: use **w=4**. Past that, anti-scaling. Wall-clock gets worse and you waste battery / heat.
+  - Mixed: use **w=4–6**. Serum 2 caps the gain past 4.
+- **Mixed-format batches are pessimal for serum2.** Routing fxp and serum2 jobs to separate pools (one at w=4 fxp, one at w=4 serum2, running concurrently) wouldn't help — wall-clock is still bounded by serum2's 133 s. Routing only becomes valuable if serum2 anti-scaling is mitigated upstream (lazy sample-load, allocator contention, etc.).
+- **README should note this.** The "use CPU count" default in the CLI is right for fxp-heavy batches but wrong for serum2-heavy ones. We don't currently document a recommendation; consider a one-line tip in `--workers --help`.
+- **No code change recommended from this data alone.** The anti-scaling is plugin-side. We can't fix it without a serum2 update; the only thing we could do in our code is hint at the right worker count, which is a docs change, not a behaviour change.
+
+### Applied
+- `scripts/stress_throughput_workers.py` — `--fxp-plugin` / `--serum2-plugin` are now suppressed when the matching `--*-dir` is absent, so single-format sweeps don't boot unused engines.
+- `.gitignore` — added `/stress_throughput_workers_fxponly*` and `/stress_throughput_workers_serum2only*`.
