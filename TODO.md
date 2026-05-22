@@ -44,6 +44,9 @@ Mitigation options to probe (none implemented):
 
 Full diff CSV at `stress_state_contamination_full/diff.csv` (gitignored). KNOWN_ISSUES.md has a user-facing entry pointing at this for the reproducibility caveat.
 
+### 4. Worker crash recovery stress test
+Verify the loky behaviour documented in `docs/implementation.md` § "Verified architectural findings" #3: a worker killed mid-batch surfaces as `TerminatedWorkerError` on its future without hanging the rest of the batch, and the executor reference becomes permanently broken (every subsequent `submit()` raises). Useful to re-run after a DawDreamer or loky upgrade. Implementation sketch: a stress harness that submits a sentinel job calling `os._exit(1)`, confirms the kill surfaces on that future, and checks that subsequent submits also raise (validating the "respawn requires a fresh `get_reusable_executor()` call" claim). ~5 minutes to write and run.
+
 ---
 
 ## Eventual / blocked
