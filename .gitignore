@@ -23,3 +23,4 @@ CLAUDE.local.md
 /stress_throughput_workers_serum2only*
 /stress_render_duration*
 /stress_memory_growth*
+/stress_pool_init*

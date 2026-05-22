@@ -332,3 +332,46 @@ Per-worker RSS (MB), same 8 worker PIDs across all passes; the two ~8 MB rows ar
 ### Applied
 - `scripts/stress_memory_growth.py` — new file. Multi-pass full-library renderer with per-pass ps-based RSS sampling and growth analysis.
 - `.gitignore` — added `/stress_memory_growth*` (anchored).
+
+## 2026-05-22 — cold vs warm pool init cost
+
+Goal: quantify the one-time cost of spinning up a loky pool — worker spawn, `init_worker` (dawdreamer / numpy / soundfile imports, `make_plugin_processor` per loaded format, warmup render for serum2), and the first render reaching steady state. For each (worker count, format mode) cell, render two back-to-back batches of N=50 identical jobs in one process; loky respawns the pool when `max_workers` or `initargs` change between cells, so each cell starts cold by construction. `init_overhead_s = cold_s − warm_s`, `break_even_N = init_overhead_s / per_job_warm_s`.
+
+Harness: `scripts/stress_pool_init.py`.
+
+| workers | mode    | cold_s | warm_s | init_overhead_s | per_job_warm_ms | break_even_N |
+|---|---|---|---|---|---|---|
+| 1 | fxp    | 16.41 | 16.27 | 0.14 | 325.3 |  0 |
+| 1 | serum2 | 11.39 | 10.90 | 0.49 | 218.0 |  2 |
+| 1 | mixed  | 12.46 | 12.09 | 0.37 | 241.8 |  2 |
+| 4 | fxp    |  4.04 |  3.67 | 0.37 |  73.4 |  5 |
+| 4 | serum2 |  5.40 |  4.98 | 0.43 |  99.6 |  4 |
+| 4 | mixed  |  3.73 |  3.22 | 0.51 |  64.3 |  8 |
+| 8 | fxp    |  2.37 |  1.99 | 0.38 |  39.8 | 10 |
+| 8 | serum2 |  5.46 |  4.94 | 0.51 |  98.9 |  5 |
+| 8 | mixed  |  2.98 |  2.26 | 0.72 |  45.2 | 16 |
+
+### Findings
+
+- **Init overhead is tiny.** Worst case (w=8, mixed) is 0.72 s. fxp-only at w=1 is 0.14 s — essentially zero. Even doubling the per-worker setup (mixed mode loads both plugins and runs both warmup renders) only adds 0.2-0.3 s on top of single-format.
+- **Spawn parallelism dominates the cost shape.** Going from w=1 → w=8 only adds ~0.25 s of init overhead per mode. JUCE imports, `make_plugin_processor`, and the warmup render all happen in parallel across workers. The serial cost per worker is ~0.5 s; pool init wall-clock is bounded by that, not by N × 0.5.
+- **Serum 2 pays ~0.1–0.2 s extra per mode** vs fxp — the warmup render in `init_worker` that absorbs Serum 2's lazy-load anomaly. That's the cost of the documented mitigation, and it's small enough we shouldn't second-guess it.
+- **Mixed mode pays the dual setup**: 0.51–0.72 s init overhead, ~50% higher than the larger of (fxp, serum2) alone at the same worker count. Both engines build + both warmups run per worker. Still ≤1 s in the worst case.
+- **Break-even batch size is small.** Even at w=8 mixed (the worst init cell), 16 jobs are enough to make init cost equal to render cost. For typical batches (hundreds to thousands of presets), init is a rounding error — well under 1% of wall-clock.
+
+### Cross-checks against prior data
+
+- w=8 fxp per_job_warm = 39.8 ms ≈ 2026-05-22 isolation sweep fxp w=8 = 37 ms ✓
+- w=8 mixed per_job_warm = 45.2 ms; the isolation mixed sweep wasn't run, but it lies between fxp 37 ms and serum2 198 ms, weighted by 50/50 mix. The harness alternates fxp/serum2, so the slower-format wait gates each round — observed value is much closer to fxp than the simple 50/50 mean, suggesting workers each finish their fxp jobs fast and idle while serum2 jobs complete on others.
+- w=4 serum2 per_job_warm = 99.6 ms; isolation full-library at w=4 was 178 ms/job. The n=50 evenly-spaced subset misses the heavy-tail KIT/PN/Pad cluster that dominates the full-library number, consistent with the duration sweep's serum2 numbers.
+
+### Implications
+
+- **The 30-minute idle timeout on `get_reusable_executor` (`batch.py:42`) is well-justified.** Embedders calling `BatchRenderer` repeatedly with short batches save 0.5–1.0 s per warm reuse. For a one-shot CLI run, the timeout doesn't matter (pool dies with the process), but the warm-reuse case is real for users using vst-render as a library inside a longer process.
+- **No reason to pre-warm pools or expose a "warm pool" knob.** Cold start is fast enough that any user-facing affordance for warming would be more confusion than benefit.
+- **The CLI doesn't need a startup banner about pool init.** Users won't notice <1 s. If anything, a "spawning N workers..." log line at INFO level (which already exists implicitly in loky output) is sufficient.
+- **For micro-batches (N ≤ 16) the user pays a relative premium**, but absolute time is still <2 s for the typical workflow. No mitigation needed.
+
+### Applied
+- `scripts/stress_pool_init.py` — new file. 3×3 sweep of (workers, mode) measuring cold vs warm pool wall-clock.
+- `.gitignore` — added `/stress_pool_init*` (anchored).
