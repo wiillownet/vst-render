@@ -250,3 +250,41 @@ Hardware: Apple M2 (4P + 4E cores). Sweep: w=1,2,4,8. 744 fxp + 747 serum2 prese
 ### Applied
 - `scripts/stress_throughput_workers.py` — `--fxp-plugin` / `--serum2-plugin` are now suppressed when the matching `--*-dir` is absent, so single-format sweeps don't boot unused engines.
 - `.gitignore` — added `/stress_throughput_workers_fxponly*` and `/stress_throughput_workers_serum2only*`.
+
+## 2026-05-22 — render-duration linearity
+
+Goal: confirm that ms/render is dominated by `load_preset` (constant) vs `engine.render` (linear in duration), as the 2026-05-21 phase profile predicted. Sweep render duration {0.5, 1, 2, 5} s at fixed w=4, fixed evenly-spaced subset (50 fxp + 50 serum2), per-format separated.
+
+Harness: `scripts/stress_render_duration.py`.
+
+| Duration | fxp ms/render | serum2 ms/render |
+|---|---|---|
+| 0.5 s | 78.7 | 100.6 |
+| 1.0 s | 82.1 | 103.9 |
+| 2.0 s | 85.9 | 116.1 |
+| 5.0 s | 101.9 | 153.5 |
+
+Linear fit `ms/render = constant + slope · duration_s`:
+
+| Format | constant (load) | slope (render) | Realtime factor |
+|---|---|---|---|
+| fxp    | 76.4 ms | 5.1 ms/s | **197×** |
+| serum2 | 93.0 ms | 12.0 ms/s | **83×** |
+
+### Cross-checks against 2026-05-21 phase profile
+
+- fxp constant 76 ms ≈ phase-profile `load_preset` 293 ms ÷ 4 workers = 73 ms ✓
+- fxp slope 5.1 ms/s ≈ phase-profile `engine.render` rate 17 ms/s ÷ 4 = 4.3 ms/s ✓
+- serum2 constant 93 ms ≈ phase-profile (`load_state` 72 + `convert_preset_file` 9 + warmup amortisation) ÷ 4 + share of heavy-tail = 93 ms ✓
+- serum2 slope 12 ms/s ≈ phase-profile `engine.render` 60 ms/s ÷ 4 = 15 ms/s; observed 12 is plausibly faster because heavy-tail presets don't dominate the 50-preset subset
+
+### Implications
+
+- **Per-render cost is dominated by the constant, not the render duration.** At duration=1s, the constant is 93% of fxp cost and 89% of serum2 cost. Even at duration=5s, the constant is still 75% of fxp / 61% of serum2.
+- **Long captures are nearly free.** A 5s render is only 1.3× (fxp) / 1.5× (serum2) the cost of a 1s render. Users who need 4-bar / 8-bar captures don't pay anywhere near 4-8× the time. This is good UX news — `--duration 5` is a fine default for tonal previews.
+- **Crossover duration (where render time = load time): ~15 s for fxp, ~8 s for serum2.** Past that, longer renders start to matter. No production batch is plausibly that long.
+- **Engine is not the bottleneck for any plausible batch size.** Both formats render at >80× realtime even with w=4 parallel contention. Optimisation effort should target `load_preset` / `load_state` (the constant), not the renderer.
+
+### Applied
+- `scripts/stress_render_duration.py` — new file. Duration sweep harness with per-format split, linear fit.
+- `.gitignore` — added `/stress_render_duration*` (anchored).

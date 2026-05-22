@@ -21,3 +21,4 @@ debug_*/
 CLAUDE.local.md
 /stress_throughput_workers_fxponly*
 /stress_throughput_workers_serum2only*
+/stress_render_duration*
