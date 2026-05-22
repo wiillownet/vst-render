@@ -4,6 +4,32 @@ Batch-render VST presets to audio files using [DawDreamer](https://github.com/DB
 
 See [CLAUDE.md](CLAUDE.md) and [docs/implementation.md](docs/implementation.md) for the live specification, [docs/architecture.md](docs/architecture.md) for a high-level orientation, [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for tracked limitations, and [DESIGN.md](DESIGN.md) for the original v1 design rationale.
 
+## How it works
+
+```mermaid
+flowchart TB
+    A[Preset directory] -->|discover_presets| B[Job list: mix of .fxp + .SerumPreset]
+    B --> C[loky reusable pool<br/>N workers]
+    C -.spawn once.-> D
+
+    subgraph D [Each worker]
+        direction TB
+        D1[init_worker:<br/>import dawdreamer<br/>build engine_fxp + engine_serum2<br/>warmup render]
+        D1 --> D2{Dispatch on<br/>preset_format}
+        D2 -->|fxp| D3[engine_fxp.load_preset → render]
+        D2 -->|serum2| D4[engine_serum2: unwrap + load_state → render]
+        D3 --> D5[soundfile.write]
+        D4 --> D5
+        D5 -.next job.-> D2
+    end
+
+    D --> E[Output WAV files]
+```
+
+- Each worker builds **one engine per loaded format**, once, in `init_worker`. Subsequent jobs hot-swap the preset on the matching engine via `load_preset` / `load_state` — the audio graph is never rebuilt mid-batch.
+- Only the engines for plugin paths you supplied are created. A `.fxp`-only run builds only `engine_fxp` in each worker; a mixed run builds both. The `engine_serum2` warmup render absorbs Serum 2's first-render lazy-load anomaly.
+- Jobs are dispatched per-worker based on each preset's file suffix — there's no static partition; whichever worker is free picks the next job and routes it to the matching engine.
+
 ## Requirements
 
 - Windows or macOS
