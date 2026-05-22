@@ -9,6 +9,7 @@ dist/
 output/
 scratch_output/
 /stress_state_contamination*
+/stress_throughput_workers*
 /profile_render_phases*
 debug_*/
 *.wav

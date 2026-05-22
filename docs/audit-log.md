@@ -183,3 +183,35 @@ Harness: `scripts/profile_render_phases.py`, 30 fxp + 30 serum2 presets, in-proc
 - `KNOWN_ISSUES.md` — new entry "Batch renders are not bit-reproducible — output depends on preset order".
 - `scripts/profile_render_phases.py` — new file. Phase profiler, runnable standalone, no test-suite deps.
 - `scripts/stress_state_contamination.py` — docstring updated to reflect post-2026-05-20 architecture (per-format engines, not shared graph).
+
+## 2026-05-22 — throughput vs worker count sweep
+
+Follow-on to the 2026-05-21 phase profiling. The projected "~80 s @ 5 workers" was an upper bound derived from the warm per-render mean; this measured the real curve on the full 1491-preset library.
+
+Harness: `scripts/stress_throughput_workers.py`, full library, single 16-bit WAV per preset, outputs deleted after each pass. Hardware: Apple M2 (4P + 4E cores, 8 logical).
+
+| Workers | Elapsed | Throughput | ms/render | Speedup | Efficiency |
+|---|---|---|---|---|---|
+| 1 | 539.4 s | 2.76/s | 361.8 | 1.00× | 1.00 |
+| 2 | 287.5 s | 5.19/s | 192.8 | 1.88× | 0.94 |
+| 4 | 183.3 s | 8.13/s | 123.0 | 2.94× | 0.74 |
+| 6 | 164.7 s | 9.05/s | 110.5 | 3.27× | 0.55 |
+| 8 | 151.5 s | 9.84/s | 101.6 | 3.56× | 0.45 |
+| 12 | 157.5 s | 9.47/s | 105.6 | 3.42× | 0.29 |
+
+### Findings
+
+- **Knee at w=4.** Up to 4 workers we get near-linear scaling (efficiency ≥ 0.74) because the M2's 4 P-cores absorb the load. Past w=4 we cross onto E-cores, which are slower per render — efficiency drops to 0.55 (w=6) and 0.45 (w=8).
+- **w=12 regresses.** Oversubscribing 8 logical cores with 12 workers costs more in context-switching than it buys; throughput drops from 9.84/s to 9.47/s.
+- **Minimum wall-clock is 151.5 s @ w=8**, ~1.9× the 80 s phase-profiling projection. The projection ignored two things: per-worker boot amortisation (small) and the heavy-tail of Serum 2 KIT/PN/Pad presets that drop throughput mid-batch from 27/s to ~12/s (visible at the 1118/1491 mark in every run).
+- **Sweet spot is w=4 for efficient throughput, w=6–8 for minimum wall-clock.** A user with battery / thermals concerns should pick w=4; one renting render time should pick w=6 or 8.
+- **Per-render floor is ~100 ms** — bounded by the slowest single preset under parallelism, not by the harness or the engine. Matches the warm phase profile's per-render mean of ~270 ms divided by ~3 cores worth of effective parallelism.
+
+### Implications
+
+- The CLI default of `--workers` = CPU count is reasonable on M2 — it lands on w=8, which is the wall-clock minimum here. If we ever surface a recommended setting in the README, "use 4–6" is the right advice for batteries / efficiency.
+- No change to `batch.py` or worker behaviour is warranted from this data. The bottleneck is per-preset `load_preset` cost (89% of fxp per-render time, per 2026-05-21), which is plugin-side. The only way to push past 9.84/s on this hardware is to mitigate state contamination cheaply enough to avoid plugin reload (TODO.md item 3) AND find a way to amortise `load_preset` itself — both speculative.
+
+### Applied
+- `scripts/stress_throughput_workers.py` — new file. Sweeps worker counts over the full library, writes CSV at `./stress_throughput_workers/throughput.csv`.
+- `.gitignore` — added `/stress_throughput_workers*` (anchored to repo root).
