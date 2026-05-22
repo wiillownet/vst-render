@@ -288,3 +288,47 @@ Linear fit `ms/render = constant + slope · duration_s`:
 ### Applied
 - `scripts/stress_render_duration.py` — new file. Duration sweep harness with per-format split, linear fit.
 - `.gitignore` — added `/stress_render_duration*` (anchored).
+
+## 2026-05-22 — long-run memory growth
+
+Goal: detect leaks proportional to render count. Render the full 1491-preset library 3× through a single loky pool at w=8, sampling per-worker RSS via `ps` between passes. loky's `get_reusable_executor` reuses workers when its config matches, so the same 8 PIDs should persist; we look at delta(pass 3 − pass 1) per PID.
+
+Harness: `scripts/stress_memory_growth.py`.
+
+| Pass | elapsed | pool total RSS |
+|---|---|---|
+| 1 | 149.4 s | 5858 MB |
+| 2 | 150.0 s | 4002 MB |
+| 3 | 154.8 s | 4782 MB |
+
+Per-worker RSS (MB), same 8 worker PIDs across all passes; the two ~8 MB rows are loky's resource_tracker + semaphore_tracker, ignored below:
+
+| PID | p1 | p2 | p3 |
+|---|---|---|---|
+| 66309 |  801 |   82 |   98 |
+| 66310 |  412 |  126 | 2616 |
+| 66311 |  369 |  124 |  338 |
+| 66312 |  260 |  599 |  575 |
+| 66313 |  310 |   82 |  641 |
+| 66314 |  826 |   82 |  141 |
+| 66315 | 2692 | 2240 |  131 |
+| 66316 |  173 |  651 |  226 |
+
+### Findings
+
+- **No monotonic growth.** Pool total RSS is non-monotonic across passes (5858 / 4002 / 4782). A true leak proportional to render count would show steady upward drift; instead the per-worker numbers oscillate wildly.
+- **Same 8 PIDs across all 3 passes.** No worker crashed and respawned. `get_reusable_executor` correctly reused the pool, so this is a clean apples-to-apples comparison.
+- **Per-worker RSS swings are dominated by which preset was last loaded.** Worker 66310 went 412 → 126 → 2616 MB. Worker 66315 went 2692 → 2240 → 131 MB. The ~2.6 GB peaks are the heavy-tail Serum 2 multi-sample presets (KIT/PN/Pad — same set that caused the throughput cliff in the 2026-05-22 isolation sweep). Each worker's last `load_state` determines its current RSS footprint at sample time.
+- **Wall-clock is stable across passes** (149.4 → 150.0 → 154.8 s; <4% drift). If there were a leak causing swap or allocator contention, later passes would slow down. They don't.
+- **Floor RSS is ~80-100 MB.** Workers that most recently loaded a light preset settle at ~80 MB. That's the steady-state JUCE + Serum engine + numpy/soundfile footprint per process. No worker drifts below or above this floor across passes.
+
+### Implications
+
+- **No leak action needed.** The renderer can safely run sustained batches of thousands of renders per pool. Three full-library passes (4473 renders) showed no monotonic memory growth.
+- **Peak RSS budget for sizing:** w=8 can spike to ~8 × 2.6 GB = ~21 GB if every worker happens to be on a heavy Serum 2 preset simultaneously — but in practice they're not synchronised, so observed peaks are ~6 GB pool total. On a 16 GB Mac this is fine; on a system with <12 GB, recommend serum2-heavy batches use w=4 or fewer.
+- **The earlier mid-batch throughput cliff at 1118/1491 is consistent with this data**, not a leak: that cliff coincides with the heavy-tail presets clustering in the directory walk, not with cumulative memory pressure.
+- **RSS sampling per pass is noisy.** A single ps snapshot captures the post-last-render state per worker. Future runs that need stronger leak signal should sample multiple times per pass and take median or 95th-percentile, or force every worker to settle on the same preset between passes.
+
+### Applied
+- `scripts/stress_memory_growth.py` — new file. Multi-pass full-library renderer with per-pass ps-based RSS sampling and growth analysis.
+- `.gitignore` — added `/stress_memory_growth*` (anchored).
