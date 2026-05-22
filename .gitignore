@@ -24,3 +24,4 @@ CLAUDE.local.md
 /stress_render_duration*
 /stress_memory_growth*
 /stress_pool_init*
+/stress_io_split*

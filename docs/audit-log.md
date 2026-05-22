@@ -375,3 +375,38 @@ Harness: `scripts/stress_pool_init.py`.
 ### Applied
 - `scripts/stress_pool_init.py` — new file. 3×3 sweep of (workers, mode) measuring cold vs warm pool wall-clock.
 - `.gitignore` — added `/stress_pool_init*` (anchored).
+
+## 2026-05-22 — soundfile.write vs engine.render share
+
+Goal: quantify how much of the per-job and wall-clock budget is `_write_audio` (soundfile.write of a PCM 16 WAV) vs `_do_render` (load_preset/state + MIDI + engine.render + get_audio) under parallel load. The 2026-05-21 phase profile measured these single-threaded; under w≥4 the open question was whether parallel I/O contention (8 workers writing ~265 KB stereo 16-bit WAVs to the same SSD) introduces serialised stalls or is fully overlapped with concurrent renders on other workers.
+
+Per cell: warm the pool, then run two measured batches with identical inputs — one with `_write_audio` enabled, one with it skipped — and compare. n=300 evenly-spaced presets per format.
+
+Harness: `scripts/stress_io_split.py`. The harness imports `worker._do_render` and `worker._write_audio` directly (private API, stress-test-only consumer) and wraps them with `time.perf_counter()` to record per-job phase times. Submits its own task function to the loky pool by reusing `get_reusable_executor` with `worker.init_worker`.
+
+| workers | mode    | disk wall (s) | nodisk wall (s) | wallclock I/O share | render ms/job (worker-time) | write ms/job (worker-time) | cumulative write share |
+|---|---|---|---|---|---|---|---|
+| 4 | fxp    | 21.71 | 21.58 |  0.6% | 285.6 | 1.4 | 0.5% |
+| 4 | serum2 | 84.06 | 83.59 |  0.6% | 556.6 | 2.1 | 0.4% |
+| 8 | fxp    | 12.53 | 12.35 |  1.4% | 325.8 | 1.4 | 0.4% |
+| 8 | serum2 | 85.69 | 85.99 | -0.4% | 881.9 | 5.9 | 0.7% |
+
+(Per-job times are worker-side, summed across the job — divide by worker count to get wall-clock per job. The negative wall-clock I/O share at w=8 serum2 is run-to-run noise on a 0.3 s delta over an 86 s batch.)
+
+### Findings
+
+- **I/O is essentially free.** Per-job write time is 1.4–5.9 ms; cumulative write share of the (render + write) budget is <1% in every cell; wall-clock disappearing if writes are removed is <1.5%. macOS APFS + the internal SSD overlaps every WAV write with concurrent rendering — no serialised stall.
+- **Skipping writes doesn't make the batch faster.** At every (workers, mode) cell, the no-disk batch is within 1.5% of the disk batch — well inside per-run noise. The disk page cache absorbs the writes; flush is async.
+- **Parallel write count doesn't matter at the scales we tested.** w=8 serum2 (8 simultaneous writers on the SSD) shows the same negligible I/O share as w=4 fxp. The 265 KB per file × 8 writers ≈ 2 MB of dirty pages per batch round — well under any cache pressure threshold.
+- **The earlier phase profile holds under parallel load.** Single-thread sf.write at ~3 ms/job stays at ~1.5–6 ms under w=8 contention. No surprise multiplier.
+
+### Implications
+
+- **No motivation to add a `--no-write` mode or write-buffering scheme.** Disk I/O isn't the bottleneck; users on SSDs gain nothing by skipping writes, and users with spinning disks weren't tested but the per-write byte count is small enough this generalises plausibly.
+- **`run_batch_to_disk` is the right default for batch sizes.** The alternative — `iter_batch_to_memory` — has its own pickle/IPC overhead (~530 KB per result × N) which empirically (not measured in this entry, but inferable) is much larger than the 1.5–6 ms write cost. The library API should keep `BatchRenderer` writing to disk by default; the memory-iterator variant is for callers who specifically need the audio array in-process.
+- **Optimisation effort goes upstream of writes.** Both the duration-sweep linear fit and this I/O split point to the same conclusion: cost lives in `load_preset` / `load_state` (the constant) and `engine.render` (the slope). soundfile.write is below the noise floor; tuning it would buy nothing.
+- **Output format / bit depth is not load-bearing.** We only measured `bit_depth="16"` here. PCM_24 and FLOAT subtypes write more bytes per sample (1.5× and 2× respectively), but even a 2× write cost is still under 12 ms per job — well below the per-job render cost. No reason to special-case 32f users.
+
+### Applied
+- `scripts/stress_io_split.py` — new file. Imports private `worker._do_render` / `_write_audio`, wraps with per-phase timing, runs disk vs no-disk A/B per (workers, mode) cell.
+- `.gitignore` — added `/stress_io_split*` (anchored).
